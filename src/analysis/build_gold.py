@@ -1,0 +1,151 @@
+# -*- coding: utf-8 -*-
+"""파일럿 정답(gold) 초안과 사람이 확정할 검토 시트를 만든다.
+
+`docs/spec/prereg-02-pilot.md` §4의 정답 규칙을 구현한다.
+  조건없음 층 → 기본금리
+  닫힘 층     → 기본금리 + 충족된 우대금리 합 (상한 적용)
+  안닫힘 층   → "알 수 없다" (하한 = 기본 + 충족 우대)
+
+**출력은 초안이다.** 사전등록 §4는 정답을 "사람이 원문을 보고 확정한 조건표"에서
+계산하도록 정했고, §2는 층 판정도 사람이 확인하도록 정했다. 이 스크립트는 그 확인을
+받을 시트를 만드는 데까지만 관여한다. 자동 매핑은 상태 변수 키워드 초안까지다.
+
+사용법: python src/analysis/build_gold.py [YYYYMMDD]
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from finlife_rules import parse_items_with_text  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PILOT_DIR = REPO_ROOT / "data" / "pilot"
+
+# prereg §3의 6변수 초안 매핑용 키워드 (추출 시점 유형 제한 — 별칭 사전이 아니다)
+STATE_KEYWORDS = {
+    "급여이체": ["급여", "월급"],
+    "자동이체": ["자동이체", "자동납입", "공과금"],
+    "카드실적": ["카드"],
+    "첫거래": ["첫거래", "첫 거래", "최초", "신규고객", "첫만남", "보유이력이 없", "미보유"],
+    "비대면가입": ["인터넷", "모바일", "비대면", "스마트", "온라인", "앱"],
+    "청약보유": ["청약"],
+}
+NEGATIVE_MARKERS = ["없는", "없이", "미보유", "미가입", "미발급", "않은", "제외"]
+
+
+def map_state(line: str) -> tuple[list[str], bool]:
+    matched = [var for var, kws in STATE_KEYWORDS.items() if any(k in line for k in kws)]
+    return matched, any(m in line for m in NEGATIVE_MARKERS)
+
+
+def draft_gold(item: dict) -> dict:
+    base, cap, state = item["base_rate"], item["cap"], item["state"]
+    rows = []
+    for parsed in parse_items_with_text(item["spcl_cnd"]):
+        matched, negative = map_state(parsed["label"])
+        if negative:
+            decision = "REVIEW-부정조건"
+        elif not matched:
+            decision = "미충족(상태변수 없음)"
+        else:
+            decision = "충족" if all(state[v] for v in matched) else "미충족"
+        rows.append({**parsed, "states": matched, "negative": negative, "decision": decision})
+
+    earned = sum(r["rate"] for r in rows if r["decision"] == "충족")
+    if cap is not None:
+        earned = min(earned, cap)
+    lower = round(base + earned, 3)
+    if item["stratum"] == "조건없음":
+        gold, kind = base, "단일값"
+    elif item["stratum"] == "닫힘":
+        gold, kind = lower, "단일값"
+    else:
+        gold, kind = None, f"알 수 없다 (하한 {lower:.2f}%)"
+    return {"qid": item["qid"], "stratum": item["stratum"], "pattern": item["state_pattern"],
+            "product": item["product_name"], "base": base, "cap": cap,
+            "earned": round(earned, 3), "gold": gold, "gold_kind": kind, "rows": rows}
+
+
+def gold_text(draft: dict) -> str:
+    return draft["gold_kind"] if draft["gold"] is None else f"{draft['gold']:.2f}%"
+
+
+def write_review_sheet(sample: dict, drafts: list[dict], stamp: str) -> Path:
+    head = [
+        f"# 파일럿 검토 시트 (스냅샷 {stamp})",
+        "",
+        "사전등록 `docs/spec/prereg-02-pilot.md` §2·§4에 따라 **사람이 확인할 두 가지**를 담았다.",
+        "",
+        "1. **층 판정** — 자동 분류가 맞는지. 파싱이 우대금리가 아닌 숫자를 항목으로 읽는",
+        "   경우가 있다(예: `· 만기 해지 시 : 연 2.50% 제공`)",
+        "2. **조건 매핑** — 각 우대 항목이 어떤 상태 변수에 걸리는지",
+        "",
+        "```",
+        "층 판정   : 닫힘 | 안닫힘 | 조건없음",
+        "조건 매핑 : 급여이체 · 자동이체 · 카드실적 · 첫거래 · 비대면가입 · 청약보유",
+        "            해당없음 = 우리 상태 변수로 표현되지 않는 조건 (→ 항상 미충족)",
+        "            부정     = 그 상태가 '없어야' 충족되는 조건",
+        "            무시     = 우대금리 항목이 아님 (파싱 오류)",
+        "```",
+        "",
+        "이 파일은 git에 커밋하지 않는다.",
+        "",
+    ]
+    body = []
+    for item, draft in zip(sample["items"], drafts):
+        body += [f"## {item['qid']} · {item['product_name']} ({item['bank']})",
+                 "",
+                 f"- 기본 {item['base_rate']}% → 최고 {item['max_rate']}%"
+                 f" (폭 {item['gap']:+.2f}) · 상한 {item['cap'] if item['cap'] is not None else '없음'}",
+                 f"- 자동 층 판정: **{item['stratum']}** · 상태패턴 {item['state_pattern']}",
+                 f"- 정답 초안: **{gold_text(draft)}**",
+                 "",
+                 "| 층 판정 확인 | |", "|---|---|", "| 자동 판정이 맞는가? | (맞음 / 틀림 → 올바른 층) |",
+                 "",
+                 "| 우대 항목 (공시 원문) | 금리 | 결합 | 자동 초안 | 판정 |",
+                 "|---|---|---|---|---|"]
+        if not draft["rows"]:
+            body.append("| *(우대금리 항목이 파싱되지 않았다 — 원문 확인 필요)* | | | | |")
+        for r in draft["rows"]:
+            drafted = "부정?" if r["negative"] else (", ".join(r["states"]) or "해당없음")
+            body.append(f"| {r['label'].replace('|', '/')[:66]} | {r['rate']} | {r['via']} | {drafted} | |")
+        body.append("")
+    out = PILOT_DIR / f"gold_review_{stamp}.md"
+    out.write_text("\n".join(head + body), encoding="utf-8")
+    return out
+
+
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    stamp = sys.argv[1] if len(sys.argv) > 1 else "20260824"
+    path = PILOT_DIR / f"sample_{stamp}.json"
+    if not path.exists():
+        raise SystemExit(f"표본이 없다: {path} — build_pilot_sample.py를 먼저 돌린다")
+    sample = json.loads(path.read_text(encoding="utf-8"))
+    drafts = [draft_gold(it) for it in sample["items"]]
+
+    out = PILOT_DIR / f"gold_draft_{stamp}.json"
+    out.write_text(json.dumps({"snapshot": stamp, "items": drafts}, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    sheet = write_review_sheet(sample, drafts, stamp)
+
+    print(f"{'qid':4s} {'층':6s} {'상태':6s} {'상품':26s} {'기본':>5s} {'획득':>5s} {'정답 초안':>14s}")
+    for d in drafts:
+        gold = "알 수 없다" if d["gold"] is None else f"{d['gold']:.2f}%"
+        print(f"{d['qid']:4s} {d['stratum']:6s} {d['pattern']:6s} {d['product'][:26]:26s} "
+              f"{d['base']:5} {d['earned']:5} {gold:>14s}")
+    total_rows = sum(len(d["rows"]) for d in drafts)
+    mapped = sum(1 for d in drafts for r in d["rows"] if r["decision"] in ("충족", "미충족"))
+    negative = sum(1 for d in drafts for r in d["rows"] if r["negative"])
+    print(f"\n우대 항목 {total_rows}개 · 상태변수 매핑 {mapped}개 ({mapped/max(total_rows,1)*100:.0f}%) "
+          f"· 부정조건 후보 {negative}개")
+    print(f"초안 → {out.relative_to(REPO_ROOT)}")
+    print(f"검토 시트 → {sheet.relative_to(REPO_ROOT)}  ← 사람이 채운다")
+
+
+if __name__ == "__main__":
+    main()
