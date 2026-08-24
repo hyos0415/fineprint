@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Personal notes (not project deliverables)
+notes/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
