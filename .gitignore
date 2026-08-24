@@ -1,6 +1,13 @@
 # Secrets
 .env
 
+# API 원본 데이터 — 커밋하지 않는다.
+# 금융감독원/협회가 API로 제공하는 데이터를 GitHub에 재배포하면 검색·크롤링에 그대로
+# 잡혀서 API로 배포하는 의미가 퇴색된다. 재현에 필요한 것은 수집 스크립트와 집계
+# 결과이며, 그건 커밋한다. 파생 산출물(평가 slice 등)을 커밋할 때가 되면 여기에
+# 예외 규칙(!data/...)을 추가한다.
+data/
+
 # Personal notes (not project deliverables)
 notes/
 
