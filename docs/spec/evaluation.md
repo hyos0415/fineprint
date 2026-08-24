@@ -64,4 +64,28 @@ Additional Latency
 크로스모델 체크는 n=2였다(`../reference/finance-verifier-findings.md` §2.1).
 이 크기에서는 어떤 개선도 측정되지 않는다.
 
-false reject 측정용 negative 사례의 출처·크기도 함께 정한다(감사 Codex V7).
+상한과 검정력 계산은 `../decisions/README.md`의 "D1 / D4 참고 자료" 참고.
+false reject 측정용 negative는 finance_verifier의 오류 없는 claim 71건을 재사용할 수 있다
+(감사 Codex V7 요구사항).
+
+## 6. 층화 보고 (필수)
+
+`../handoff/v2.md` §8.5. 적금까지 범위를 넓혔으므로 **집계값만 보고하면 안 된다.**
+
+```
+상품군       정기예금 / 적금
+조건 구조    평면 ALL_OF / 혜택스코핑 필요 / 1단계 중첩 / MVP 제외 유형(k-of-n 등)
+실패 유형    condition_omission / INSUFFICIENT 경계
+gold 출처    원문에 AND 명시 / 사람이 AND 판정 / 판정 불가(제외)
+```
+
+원래 실패가 발견된 분포(정기예금)와 측정 분포가 달라질 수 있다. 나눠 보고하지 않으면
+차이가 평균에 묻힌다. **알려진 정기예금 3건은 slice에 반드시 유지한다.**
+
+## 7. 두 번째 타깃 — INSUFFICIENT 경계
+
+`../handoff/v2.md` §4.1. `condition_omission`과 **분리해서** 측정한다.
+
+- 표본: Pilot 4건 + Test 2건 = 6건, `spcl_cnd`가 null인 상품 6개로 추가 생성 가능
+- 검사 형태: "claim이 가리키는 필드 타입이 evidence 구조에 있는가" — 1홉 조회
+- 주의: 이건 **구조가 필요하다**의 근거이지 **그래프가 필요하다**의 근거가 아니다
