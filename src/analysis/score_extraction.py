@@ -12,7 +12,8 @@
 갖는다. 추출기가 목표값을 보면 거기에 맞춰 값을 만들어낼 수 있다 — 특히 LLM 추출기.
 
 사용법:
-    python src/analysis/score_extraction.py [YYYYMMDD] [--label rules-v1]
+    python src/analysis/score_extraction.py [YYYYMMDD] [--label rules-v2] [--rules v2|v3]
+    python src/analysis/score_extraction.py 20260825 --group savingsbank --rules v3
 """
 from __future__ import annotations
 
@@ -23,18 +24,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from finlife_rules import (TOLERANCE, is_no_condition_literal,  # noqa: E402
-                           parse_bonus_items)
+                           parse_bonus_items, parse_bonus_items_v3)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
 OUT_DIR = REPO_ROOT / "data" / "pilot"
 
 
-def load_rows(stamp: str) -> list[dict]:
+def load_rows(stamp: str, group: str = "bank") -> list[dict]:
     """옵션 단위 행. 추출 입력(text)과 채점 정보(base/max)를 분리해 담는다."""
     rows = []
+    suffix = "" if group == "bank" else f"_{group}"
     for kind, label in (("deposit", "예금"), ("saving", "적금")):
-        payload = json.loads((RAW_DIR / f"{kind}_{stamp}.json").read_text(encoding="utf-8"))
+        payload = json.loads(
+            (RAW_DIR / f"{kind}{suffix}_{stamp}.json").read_text(encoding="utf-8"))
         base = {b["fin_prdt_cd"]: b for b in payload["baseList"]}
         for opt in payload["optionList"]:
             product = base.get(opt["fin_prdt_cd"])
@@ -49,9 +52,16 @@ def load_rows(stamp: str) -> list[dict]:
     return rows
 
 
-def extract_rules(text: str, term: int) -> dict:
-    """규칙 파서 추출기. 입력은 조건문 텍스트와 가입기간뿐이다 (금리를 보지 않는다)."""
-    items, cap = parse_bonus_items(text, term)
+RULE_VERSIONS = {"v2": parse_bonus_items, "v3": parse_bonus_items_v3}
+
+
+def extract_rules(text: str, term: int, rules: str = "v2") -> dict:
+    """규칙 파서 추출기. 입력은 조건문 텍스트와 가입기간뿐이다 (금리를 보지 않는다).
+
+    v2는 파일럿·gold를 만든 버전이므로 고정이다. v3는 규칙 H·I·J를 넣은 것
+    (`../../docs/spec/prereg-05-rules-refinement.md`).
+    """
+    items, cap = RULE_VERSIONS[rules](text, term)
     total = sum(items)
     return {"items": items, "cap": cap,
             "declared": min(total, cap) if (items and cap is not None) else total}
@@ -61,39 +71,50 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
-    label = "rules"
-    if "--label" in argv:
-        i = argv.index("--label")
-        label = argv[i + 1] if i + 1 < len(argv) else label
-        argv = argv[:i] + argv[i + 2:]
+    label, rules, group = "rules", "v2", "bank"
+    for flag in ("--label", "--rules", "--group"):
+        if flag in argv:
+            i = argv.index(flag)
+            value = argv[i + 1] if i + 1 < len(argv) else None
+            if value is None:
+                raise SystemExit(f"{flag} 값이 없다")
+            label, rules, group = ((value, rules, group) if flag == "--label" else
+                                   (label, value, group) if flag == "--rules" else
+                                   (label, rules, value))
+            argv = argv[:i] + argv[i + 2:]
+    if rules not in RULE_VERSIONS:
+        raise SystemExit(f"--rules 는 {list(RULE_VERSIONS)} 중 하나")
     stamp = argv[0] if argv else "20260824"
 
-    rows = load_rows(stamp)
+    rows = load_rows(stamp, group)
     scored, buckets = [], Counter()
     for row in rows:
         if is_no_condition_literal(row["text"]):
             buckets["조건없음"] += 1
             continue
-        got = extract_rules(row["text"], int(row["term"]) if str(row["term"]).isdigit() else 12)
+        got = extract_rules(row["text"],
+                            int(row["term"]) if str(row["term"]).isdigit() else 12, rules)
+        # 항목 0개도 산수 판정을 받는다 — 사전등록 §3의 정의가 "항목 합계가 |최고−기본|와
+        # 맞는가"이므로, 뽑을 게 없고 폭도 0이면(합계 0 == 폭 0) 닫힌 것이다. 공시가
+        # "우대분 없음"이라고 말하는 행에서 파서가 아무것도 뽑지 않은 것은 옳은 행동이고,
+        # 그걸 실패로 세면 지표가 틀린 것이다. 항목 0개는 부 지표로 계속 함께 센다.
+        diff = round(abs(got["declared"] - row["gap"]), 3)
         if not got["items"]:
             buckets["항목 0개"] += 1
-            diff = None
-        else:
-            diff = round(abs(got["declared"] - row["gap"]), 3)
-            buckets["닫힘" if diff <= TOLERANCE else "불일치"] += 1
+        buckets["닫힘" if diff <= TOLERANCE else "불일치"] += 1
         scored.append({**{k: row[k] for k in ("kind", "name", "term", "base", "max", "gap")},
                        "declared": got["declared"], "cap": got["cap"],
                        "n_items": len(got["items"]), "diff": diff})
 
     with_cond = [s for s in scored]
-    closed = [s for s in with_cond if s["diff"] is not None and s["diff"] <= TOLERANCE]
-    print(f"추출 채점 [{label}] · 스냅샷 {stamp}")
+    closed = [s for s in with_cond if s["diff"] <= TOLERANCE]
+    print(f"추출 채점 [{label}] · 스냅샷 {stamp} ({group}) · 규칙 {rules}")
     print(f"  옵션 행 {len(rows)} · 조건 있는 행 {len(with_cond)} · 조건없음 {buckets['조건없음']}")
     print()
     print(f"  ■ 닫힘률  {len(closed)}/{len(with_cond)} = {len(closed)/max(len(with_cond),1)*100:.1f}%"
           f"   ← 추출기 버전 간 비교 지표 (높을수록 좋다)")
     print(f"     불일치   {buckets['불일치']}")
-    print(f"     항목 0개 {buckets['항목 0개']}   ← 추출이 아무것도 못 뽑은 행")
+    print(f"     항목 0개 {buckets['항목 0개']}   ← 부 지표. 그중 폭이 0인 행은 닫힘으로 센다")
     print()
     print("  불일치 폭 분포 (|합계 − 실제폭|)")
     for lo, hi in ((0.0, 0.06), (0.06, 0.3), (0.3, 1.0), (1.0, 3.0), (3.0, 99.0)):
@@ -110,8 +131,10 @@ def main() -> None:
                   f"= {len(ok)/len(sub)*100:5.1f}%")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"extraction_{label}_{stamp}.json"
+    suffix = "" if group == "bank" else f"_{group}"
+    out = OUT_DIR / f"extraction_{label}{suffix}_{stamp}.json"
     out.write_text(json.dumps({"label": label, "snapshot": stamp,
+                               "group": group, "rules": rules,
                                "closure_rate": len(closed) / max(len(with_cond), 1),
                                "n_with_condition": len(with_cond), "n_closed": len(closed),
                                "buckets": dict(buckets), "rows": scored},
