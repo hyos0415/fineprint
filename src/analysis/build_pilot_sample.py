@@ -23,7 +23,7 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 OUT_DIR = REPO_ROOT / "data" / "pilot"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from finlife_rules import classify, declared_bonus  # noqa: E402  (사전등록 §2 규칙 A~D)
+from finlife_rules import classify, declared_bonus, parse_bonus_items  # noqa: E402  (사전등록 §2 규칙 A~D)
 
 TERM = "12"                       # 만기 12개월 고정 (prereg §3)
 QUOTA = {"닫힘": 15, "안닫힘": 10, "조건없음": 5}
@@ -107,6 +107,9 @@ def main() -> None:
         chosen = pick(strata[name], quota)
         if len(chosen) < quota:
             print(f"[warn] {name} 층이 {len(chosen)}건뿐이다 (목표 {quota}) — 부족분은 채우지 않는다")
+        # 관측 해상도(prereg §2) — 우대 항목이 많은 문항에 충족 상태를 붙인다
+        chosen = sorted(chosen, key=lambda r: (-len(parse_bonus_items(r["spcl_cnd"])[0]),
+                                               r["product_name"]))
         for i, row in enumerate(chosen):
             qid += 1
             pattern = PATTERN_ORDER[i % len(PATTERN_ORDER)]
