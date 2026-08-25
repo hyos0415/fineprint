@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from finlife_rules import parse_items_with_text  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PILOT_DIR = REPO_ROOT / "data" / "pilot"
 
-# prereg §3의 6변수 초안 매핑용 키워드 (추출 시점 유형 제한 — 별칭 사전이 아니다)
+# prereg §3의 7변수 초안 매핑용 키워드 (추출 시점 유형 제한 — 별칭 사전이 아니다)
 STATE_KEYWORDS = {
     "급여이체": ["급여", "월급"],
     "자동이체": ["자동이체", "자동납입", "공과금"],
@@ -32,8 +33,63 @@ STATE_KEYWORDS = {
     "첫거래": ["첫거래", "첫 거래", "최초", "신규고객", "첫만남", "보유이력이 없", "미보유"],
     "비대면가입": ["인터넷", "모바일", "비대면", "스마트", "온라인", "앱"],
     "청약보유": ["청약"],
+    "기존예치잔액": ["평잔", "총수신", "요구불"],
 }
 NEGATIVE_MARKERS = ["없는", "없이", "미보유", "미가입", "미발급", "않은", "제외"]
+
+AMOUNT = re.compile(r"(\d+(?:\.\d+)?)\s*(천만원|백만원|만원)\s*이상")
+MONTHS = re.compile(r"(\d+)\s*개월\s*이상")
+COUNT = re.compile(r"(\d+)\s*(?:회|건)\s*이상")
+RATIO = re.compile(r"(\d+)\s*/\s*(\d+)\s*이상")
+UNIT = {"만원": 10_000, "백만원": 1_000_000, "천만원": 10_000_000}
+
+
+def extract_threshold(line: str) -> dict | None:
+    """조건이 요구하는 임계값을 뽑는다 (금액 / 개월 / 횟수 / 기간비율)."""
+    found = AMOUNT.search(line)
+    if found:
+        return {"kind": "amount", "value": float(found.group(1)) * UNIT[found.group(2)],
+                "text": found.group(0)}
+    found = MONTHS.search(line)
+    if found:
+        return {"kind": "months", "value": int(found.group(1)), "text": found.group(0)}
+    found = RATIO.search(line)
+    if found:
+        return {"kind": "ratio", "value": int(found.group(1)) / int(found.group(2)),
+                "text": found.group(0)}
+    found = COUNT.search(line)
+    if found:
+        return {"kind": "count", "value": int(found.group(1)), "text": found.group(0)}
+    return None
+
+
+def meets(var: str, state: dict, threshold: dict | None) -> bool:
+    """상태가 그 조건을 충족하는가. 임계가 있으면 수치로 비교한다 (prereg §3)."""
+    if var == "첫거래":
+        return bool(state["첫거래"])
+    if var == "비대면가입":
+        return bool(state["비대면가입"])
+    if var == "청약보유":
+        return bool(state["청약보유"])
+    if var == "카드실적":
+        have = state["카드_월결제액"]
+        return have >= threshold["value"] if (threshold and threshold["kind"] == "amount") else have > 0
+    if var == "급여이체":
+        if threshold and threshold["kind"] == "amount":
+            return state["급여_월입금액"] >= threshold["value"]
+        if threshold and threshold["kind"] == "months":
+            return state["급여_개월수"] >= threshold["value"]
+        return state["급여_월입금액"] > 0
+    if var == "자동이체":
+        if threshold and threshold["kind"] == "ratio":
+            return state["자동이체_기간비율"] >= threshold["value"]
+        if threshold and threshold["kind"] == "count":
+            return state["자동이체_월건수"] >= threshold["value"]
+        return state["자동이체_월건수"] > 0
+    if var == "기존예치잔액":
+        have = state["기존예치잔액"]
+        return have >= threshold["value"] if (threshold and threshold["kind"] == "amount") else have > 0
+    return False
 
 
 def map_state(line: str) -> tuple[list[str], bool]:
@@ -46,13 +102,15 @@ def draft_gold(item: dict) -> dict:
     rows = []
     for parsed in parse_items_with_text(item["spcl_cnd"]):
         matched, negative = map_state(parsed["label"])
+        threshold = extract_threshold(parsed["label"])
         if negative:
             decision = "REVIEW-부정조건"
         elif not matched:
             decision = "미충족(상태변수 없음)"
         else:
-            decision = "충족" if all(state[v] for v in matched) else "미충족"
-        rows.append({**parsed, "states": matched, "negative": negative, "decision": decision})
+            decision = "충족" if all(meets(v, state, threshold) for v in matched) else "미충족"
+        rows.append({**parsed, "states": matched, "negative": negative,
+                     "threshold": threshold["text"] if threshold else None, "decision": decision})
 
     earned = sum(r["rate"] for r in rows if r["decision"] == "충족")
     if cap is not None:
@@ -105,13 +163,14 @@ def write_review_sheet(sample: dict, drafts: list[dict], stamp: str) -> Path:
                  "",
                  "| 층 판정 확인 | |", "|---|---|", "| 자동 판정이 맞는가? | (맞음 / 틀림 → 올바른 층) |",
                  "",
-                 "| 우대 항목 (공시 원문) | 금리 | 결합 | 자동 초안 | 판정 |",
-                 "|---|---|---|---|---|"]
+                 "| 우대 항목 (공시 원문) | 금리 | 임계 | 자동 초안 | 자동 판정 | 확인 |",
+                 "|---|---|---|---|---|---|"]
         if not draft["rows"]:
-            body.append("| *(우대금리 항목이 파싱되지 않았다 — 원문 확인 필요)* | | | | |")
+            body.append("| *(우대금리 항목이 파싱되지 않았다 — 원문 확인 필요)* | | | | | |")
         for r in draft["rows"]:
             drafted = "부정?" if r["negative"] else (", ".join(r["states"]) or "해당없음")
-            body.append(f"| {r['label'].replace('|', '/')[:66]} | {r['rate']} | {r['via']} | {drafted} | |")
+            body.append(f"| {r['label'].replace('|', '/')[:60]} | {r['rate']} | {r.get('threshold') or '-'} "
+                        f"| {drafted} | {r['decision']} | |")
         body.append("")
     out = PILOT_DIR / f"gold_review_{stamp}.md"
     out.write_text("\n".join(head + body), encoding="utf-8")

@@ -20,7 +20,19 @@ import re
 NO_CONDITION_LITERALS = {"없음", "해당없음", "해당사항없음", "우대조건없음", "해당무"}
 LEADING_MARKS = "▶※*·-●○□■◆:>〉 \t"
 
-CAP_HEADER = re.compile(r"(?:최대|최고)\s*(?:우대)?(?:금리|이율)")
+# 규칙 B′ — 상한 표기 변형. 실제 공시에서 확인된 네 가지 어순을 모두 인식한다.
+#   "최고우대금리: 연0.45%p" / "최고 연 2.20%p" / "우대이율 최대 2.5%"
+#   "우대이율(최대 0.90%p)" / "최고 0.4%p 추가 우대금리 제공"
+CAP_HEADER = re.compile(
+    r"(?:최대|최고)\s*(?:우대)?(?:금리|이율)"                       # 최고우대금리 …
+    r"|우대\s*(?:이?율|금리)\s*[(（]?\s*(?:최대|최고)"              # 우대이율 최대 / 우대금리 최대한도 / 우대이율(최대
+    r"|^[\s*※▶·-]*(?:최대|최고)\s*(?:연\s*)?\d+(?:\.\d+)?\s*%"   # 줄머리가 최고/최대 + 숫자
+    r"|(?:최대|최고)\s*(?:연\s*)?\d+(?:\.\d+)?\s*%\s*p?\s*(?:추가|제공)"  # 최고 0.4%p 추가
+)
+# 규칙 E — "중복 적용 불가"가 명시된 상품은 항목 합계가 성립하지 않는다.
+# 표기 위치가 상품마다 달라(앞·뒤·괄호) 자동 분해가 위험하므로, 감지만 하고
+# 실제 합계는 사람이 확정한 override(gold_overrides.json)를 쓴다.
+EXCLUSIVE = re.compile(r"중복\s*적용\s*불가|중복적용\s*불가|중복\s*불가|중복\s*제외")
 EACH_RATE = re.compile(r"각\s*(?:연\s*)?(\d+\.?\d*)\s*%\s*p?")
 RATE = re.compile(r"(\d+\.?\d*)\s*%\s*p?")
 BULLET = re.compile(r"^\s*(?:[-*·]|[①-⑳]|\d{1,2}\s*[.)]|[가-하]\s*[.)])")
@@ -48,10 +60,11 @@ def parse_bonus_items(text: str) -> tuple[list[float], float | None]:
     cap: float | None = None
     pending = 0                                   # 금리 없이 나열된 항목 수
     for line in (ln.strip() for ln in re.split(r"[\n\r]+", text) if ln.strip()):
-        if CAP_HEADER.search(line):               # B — 상한 헤더는 항목이 아니다
+        if CAP_HEADER.search(line):               # B·B′ — 상한 헤더는 항목이 아니다
             found = RATE.search(line)
             if found:
-                cap = float(found.group(1))
+                value = float(found.group(1))
+                cap = value if cap is None else max(cap, value)   # 상·하위 상한이 함께 있으면 큰 쪽
             continue
         each = EACH_RATE.search(line)
         if each:                                  # C — "각 연0.10%p"
@@ -71,6 +84,11 @@ def declared_bonus(text: str) -> tuple[float, float | None]:
     items, cap = parse_bonus_items(text)
     total = sum(items)
     return (min(total, cap) if (items and cap is not None) else total), cap
+
+
+def has_exclusive_group(text: str) -> bool:
+    """'중복 적용 불가'가 명시됐는가 (규칙 E — 합계 대신 사람이 확정한 값을 쓴다)."""
+    return bool(EXCLUSIVE.search(text))
 
 
 def classify(text: str, gap: float) -> str:
