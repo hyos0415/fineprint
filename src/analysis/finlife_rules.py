@@ -25,14 +25,40 @@ LEADING_MARKS = "▶※*·-●○□■◆:>〉 \t"
 #   "우대이율(최대 0.90%p)" / "최고 0.4%p 추가 우대금리 제공"
 CAP_HEADER = re.compile(
     r"(?:최대|최고)\s*(?:우대)?(?:금리|이율)"                       # 최고우대금리 …
-    r"|우대\s*(?:이?율|금리)\s*[(（]?\s*(?:최대|최고)"              # 우대이율 최대 / 우대금리 최대한도 / 우대이율(최대
+    r"|(?:우대|가산|추가)\s*(?:이?율|금리)\s*[:：(（]?\s*(?:최대|최고)"   # 우대이율 최대 / 가산금리 최고              # 우대이율 최대 / 우대금리 최대한도 / 우대이율(최대
     r"|^[\s*※▶·-]*(?:최대|최고)\s*(?:연\s*)?\d+(?:\.\d+)?\s*%"   # 줄머리가 최고/최대 + 숫자
-    r"|(?:최대|최고)\s*(?:연\s*)?\d+(?:\.\d+)?\s*%\s*p?\s*(?:추가|제공)"  # 최고 0.4%p 추가
+    r"|(?:최대|최고)\s*(?:연\s*)?\d+(?:\.\d+)?\s*%\s*p?\s*(?:추가|제공|우대|적용)"  # 최고 0.4%p 추가 / 최고 2.1%p 우대금리 적용
 )
 # 규칙 E — "중복 적용 불가"가 명시된 상품은 항목 합계가 성립하지 않는다.
 # 표기 위치가 상품마다 달라(앞·뒤·괄호) 자동 분해가 위험하므로, 감지만 하고
 # 실제 합계는 사람이 확정한 override(gold_overrides.json)를 쓴다.
 EXCLUSIVE = re.compile(r"중복\s*적용\s*불가|중복적용\s*불가|중복\s*불가|중복\s*제외")
+# 규칙 G — 기간별 대안 항목. "3~5개월" "6~11개월" "12개월제" 같은 범위가 붙은 항목은
+# 우리 기간(12개월)을 포함하는 것만 센다. 적용 범위 밖 항목을 더하면 합계가 부푼다.
+# 가입기간을 가리키는 표기만 인식한다. "1개월 내 재신규" "3개월 내 잔액"처럼 조건 내부의
+# 시간 제약은 가입기간이 아니다 — 초판이 이걸 빼버려 항목 합계가 모자랐다(검토 중 발견).
+TERM_RANGE = re.compile(
+    r"(\d{1,2})\s*[~\-–]\s*(\d{1,2})\s*개월"      # 3~5개월
+    r"|(\d{1,2})\s*개월\s*제"                        # 12개월제
+    r"|(\d{1,2})\s*년\s*제?\s*[::]?"                # 1년제 / 1년:
+)
+TARGET_TERM = 12
+
+
+def term_applies(line: str, term: int = TARGET_TERM) -> bool:
+    """항목에 기간 범위가 붙어 있으면 우리 기간을 포함하는지 본다 (규칙 G)."""
+    hits = list(TERM_RANGE.finditer(line))
+    if not hits:
+        return True                               # 기간 표기가 없으면 적용 대상
+    for m in hits:
+        if m.group(1) and m.group(2):                 # N~M개월
+            if int(m.group(1)) <= term <= int(m.group(2)):
+                return True
+        elif m.group(3) and int(m.group(3)) == term:  # N개월제
+            return True
+        elif m.group(4) and int(m.group(4)) * 12 == term:   # N년제 / N년:
+            return True
+    return False
 EACH_RATE = re.compile(r"각\s*(?:연\s*)?(\d+\.?\d*)\s*%\s*p?")
 RATE = re.compile(r"(\d+\.?\d*)\s*%\s*p?")
 BULLET = re.compile(r"^\s*(?:[-*·]|[①-⑳]|\d{1,2}\s*[.)]|[가-하]\s*[.)])")
@@ -73,7 +99,8 @@ def parse_bonus_items(text: str) -> tuple[list[float], float | None]:
             continue
         values = [v for v in (float(x) for x in RATE.findall(line)) if 0 < v <= ITEM_RATE_MAX]
         if values:
-            items.append(max(values))             # D — 줄 안에서는 최댓값 하나
+            if term_applies(line):                # G — 적용 기간 밖 항목은 세지 않는다
+                items.append(max(values))         # D — 줄 안에서는 최댓값 하나
             pending = 0
         elif BULLET.match(line):
             pending += 1
@@ -125,7 +152,8 @@ def parse_items_with_text(text: str) -> list[dict]:
             continue
         values = [v for v in (float(x) for x in RATE.findall(line)) if 0 < v <= ITEM_RATE_MAX]
         if values:
-            out.append({"label": line, "rate": max(values), "via": "직접"})
+            if term_applies(line):                # G
+                out.append({"label": line, "rate": max(values), "via": "직접"})
             pending = []
         elif BULLET.match(line):
             pending.append(line)

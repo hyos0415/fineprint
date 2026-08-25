@@ -34,8 +34,11 @@ STATE_KEYWORDS = {
     "비대면가입": ["인터넷", "모바일", "비대면", "스마트", "온라인", "앱"],
     "청약보유": ["청약"],
     "기존예치잔액": ["평잔", "총수신", "요구불"],
+    "통장미발급": ["통장미발급", "통장 미발급", "무통장", "종이통장", "전자통장", "통장미발행"],
 }
-NEGATIVE_MARKERS = ["없는", "없이", "미보유", "미가입", "미발급", "않은", "제외"]
+# "미발급"은 뺐다 — 통장미발급이 이제 상태 변수라 부정 조건으로 볼 필요가 없다.
+# "제외"도 뺐다 — "만기달 제외한 계약기간의 1/2" 처럼 부정 조건이 아닌 문구를 잡았다(오탐).
+NEGATIVE_MARKERS = ["없는", "없이", "미보유", "미가입", "않은"]
 
 AMOUNT = re.compile(r"(\d+(?:\.\d+)?)\s*(천만원|백만원|만원)\s*이상")
 MONTHS = re.compile(r"(\d+)\s*개월\s*이상")
@@ -71,6 +74,8 @@ def meets(var: str, state: dict, threshold: dict | None) -> bool:
         return bool(state["비대면가입"])
     if var == "청약보유":
         return bool(state["청약보유"])
+    if var == "통장미발급":
+        return bool(state["통장미발급"])
     if var == "카드실적":
         have = state["카드_월결제액"]
         return have >= threshold["value"] if (threshold and threshold["kind"] == "amount") else have > 0
@@ -97,14 +102,32 @@ def map_state(line: str) -> tuple[list[str], bool]:
     return matched, any(m in line for m in NEGATIVE_MARKERS)
 
 
+def load_overrides() -> dict:
+    path = Path(__file__).resolve().parent / "gold_overrides.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8")).get("products", {})
+
+
+OVERRIDES = load_overrides()
+
+
 def draft_gold(item: dict) -> dict:
     base, cap, state = item["base_rate"], item["cap"], item["state"]
     rows = []
+    ov = OVERRIDES.get(item["product_code"], {})
+    stratum = ov.get("stratum") or item["stratum"]
+    skip = ov.get("ignore_lines", [])
     for parsed in parse_items_with_text(item["spcl_cnd"]):
+        if any(marker in parsed["label"] for marker in skip):
+            continue
         matched, negative = map_state(parsed["label"])
         threshold = extract_threshold(parsed["label"])
-        if negative:
-            decision = "REVIEW-부정조건"
+        if negative and matched:
+            # 부정 조건("보유이력이 없는 경우")은 상태 변수 의미로 그대로 판정된다.
+            # 우리 변수 `첫거래`가 이미 "이 은행과 거래한 적이 없음"을 뜻하므로
+            # 별도 극성 반전이 필요 없다 (2026-08-25 확정).
+            decision = "충족" if all(meets(v, state, threshold) for v in matched) else "미충족"
         elif not matched:
             decision = "미충족(상태변수 없음)"
         else:
@@ -116,13 +139,13 @@ def draft_gold(item: dict) -> dict:
     if cap is not None:
         earned = min(earned, cap)
     lower = round(base + earned, 3)
-    if item["stratum"] == "조건없음":
+    if stratum == "조건없음":
         gold, kind = base, "단일값"
-    elif item["stratum"] == "닫힘":
+    elif stratum == "닫힘":
         gold, kind = lower, "단일값"
     else:
         gold, kind = None, f"알 수 없다 (하한 {lower:.2f}%)"
-    return {"qid": item["qid"], "stratum": item["stratum"], "pattern": item["state_pattern"],
+    return {"qid": item["qid"], "stratum": stratum, "pattern": item["state_pattern"],
             "product": item["product_name"], "base": base, "cap": cap,
             "earned": round(earned, 3), "gold": gold, "gold_kind": kind, "rows": rows}
 

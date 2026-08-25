@@ -33,21 +33,32 @@ PATTERNS = {
     "P-많음": {"급여_월입금액": 2_500_000, "급여_개월수": 12,
                "자동이체_월건수": 2, "자동이체_기간비율": 1.0,
                "카드_월결제액": 1_200_000, "첫거래": True, "비대면가입": True,
-               "청약보유": True, "기존예치잔액": 1_000_000},
+               "청약보유": True, "기존예치잔액": 1_000_000, "통장미발급": True},
     "P-일부": {"급여_월입금액": 2_500_000, "급여_개월수": 12,
                "자동이체_월건수": 2, "자동이체_기간비율": 1.0,
                "카드_월결제액": 0, "첫거래": False, "비대면가입": True,
-               "청약보유": False, "기존예치잔액": 1_000_000},
+               "청약보유": False, "기존예치잔액": 1_000_000, "통장미발급": True},
     "P-없음": {"급여_월입금액": 0, "급여_개월수": 0,
                "자동이체_월건수": 0, "자동이체_기간비율": 0.0,
                "카드_월결제액": 0, "첫거래": False, "비대면가입": False,
-               "청약보유": False, "기존예치잔액": 0},
+               "청약보유": False, "기존예치잔액": 0, "통장미발급": False},
 }
 PATTERN_ORDER = ["P-많음", "P-일부", "P-없음"]
 
 
 def squash(text: str) -> str:
     return re.sub(r"\s+", "", text)
+
+
+def load_overrides() -> dict:
+    """사람이 확정한 override (prereg §2.1 규칙 E)."""
+    path = Path(__file__).resolve().parent / "gold_overrides.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8")).get("products", {})
+
+
+OVERRIDES = load_overrides()
 
 
 def collect(stamp: str) -> dict[str, list[dict]]:
@@ -68,7 +79,8 @@ def collect(stamp: str) -> dict[str, list[dict]]:
             text = product.get("spcl_cnd") or ""
             gap = round(r2 - r1, 3)
             declared, cap = declared_bonus(text)
-            strata[classify(text, gap)].append({
+            stratum = OVERRIDES.get(opt["fin_prdt_cd"], {}).get("stratum") or classify(text, gap)
+            strata[stratum].append({
                 "product_kind": label,
                 "product_code": opt["fin_prdt_cd"],
                 "product_name": " ".join(product["fin_prdt_nm"].split()),
