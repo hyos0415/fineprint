@@ -75,25 +75,27 @@ def main() -> None:
             buckets["조건없음"] += 1
             continue
         got = extract_rules(row["text"], int(row["term"]) if str(row["term"]).isdigit() else 12)
+        # 항목 0개도 산수 판정을 받는다 — 사전등록 §3의 정의가 "항목 합계가 |최고−기본|와
+        # 맞는가"이므로, 뽑을 게 없고 폭도 0이면(합계 0 == 폭 0) 닫힌 것이다. 공시가
+        # "우대분 없음"이라고 말하는 행에서 파서가 아무것도 뽑지 않은 것은 옳은 행동이고,
+        # 그걸 실패로 세면 지표가 틀린 것이다. 항목 0개는 부 지표로 계속 함께 센다.
+        diff = round(abs(got["declared"] - row["gap"]), 3)
         if not got["items"]:
             buckets["항목 0개"] += 1
-            diff = None
-        else:
-            diff = round(abs(got["declared"] - row["gap"]), 3)
-            buckets["닫힘" if diff <= TOLERANCE else "불일치"] += 1
+        buckets["닫힘" if diff <= TOLERANCE else "불일치"] += 1
         scored.append({**{k: row[k] for k in ("kind", "name", "term", "base", "max", "gap")},
                        "declared": got["declared"], "cap": got["cap"],
                        "n_items": len(got["items"]), "diff": diff})
 
     with_cond = [s for s in scored]
-    closed = [s for s in with_cond if s["diff"] is not None and s["diff"] <= TOLERANCE]
+    closed = [s for s in with_cond if s["diff"] <= TOLERANCE]
     print(f"추출 채점 [{label}] · 스냅샷 {stamp}")
     print(f"  옵션 행 {len(rows)} · 조건 있는 행 {len(with_cond)} · 조건없음 {buckets['조건없음']}")
     print()
     print(f"  ■ 닫힘률  {len(closed)}/{len(with_cond)} = {len(closed)/max(len(with_cond),1)*100:.1f}%"
           f"   ← 추출기 버전 간 비교 지표 (높을수록 좋다)")
     print(f"     불일치   {buckets['불일치']}")
-    print(f"     항목 0개 {buckets['항목 0개']}   ← 추출이 아무것도 못 뽑은 행")
+    print(f"     항목 0개 {buckets['항목 0개']}   ← 부 지표. 그중 폭이 0인 행은 닫힘으로 센다")
     print()
     print("  불일치 폭 분포 (|합계 − 실제폭|)")
     for lo, hi in ((0.0, 0.06), (0.06, 0.3), (0.3, 1.0), (1.0, 3.0), (3.0, 99.0)):

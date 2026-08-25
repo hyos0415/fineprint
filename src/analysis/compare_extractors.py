@@ -176,12 +176,13 @@ def main() -> None:
             b_sum, b_cap, b_n = declared_llm(got["parsed"])
         else:
             b_sum, b_cap, b_n = 0.0, None, 0
+        # 항목 0개도 산수 판정을 받는다 (사전등록 §3 정의 그대로 · decisions/0007)
         a_diff, b_diff = abs(a_sum - row["gap"]), abs(b_sum - row["gap"])
         scored.append({**row, "text": pair["text"],
                        "a_sum": a_sum, "a_cap": a_cap, "a_n": a_n,
-                       "a_diff": round(a_diff, 3), "a_closed": a_n > 0 and a_diff <= TOLERANCE,
+                       "a_diff": round(a_diff, 3), "a_closed": a_diff <= TOLERANCE,
                        "b_sum": b_sum, "b_cap": b_cap, "b_n": b_n,
-                       "b_diff": round(b_diff, 3), "b_closed": b_n > 0 and b_diff <= TOLERANCE,
+                       "b_diff": round(b_diff, 3), "b_closed": b_diff <= TOLERANCE,
                        "schema_ok": got["schema_ok"]})
     for got in llm["pairs"]:
         if got["schema_ok"]:
@@ -282,8 +283,8 @@ def main() -> None:
     print("□ 불일치 폭 분포 (|합계 − 실제폭|)")
     print(f"    {'구간':>16}   {'A':>5} {'B':>5}")
     for lo_d, hi_d in ((0.0, 0.06), (0.06, 0.3), (0.3, 1.0), (1.0, 3.0), (3.0, 1e9)):
-        ca = sum(1 for r in scored if r["a_n"] and lo_d < r["a_diff"] <= hi_d)
-        cb = sum(1 for r in scored if r["b_n"] and lo_d < r["b_diff"] <= hi_d)
+        ca = sum(1 for r in scored if lo_d < r["a_diff"] <= hi_d)
+        cb = sum(1 for r in scored if lo_d < r["b_diff"] <= hi_d)
         if ca or cb:
             label = f"{lo_d:.2f} < d <= {hi_d:.2f}" if hi_d < 1e9 else f"{lo_d:.2f} < d"
             print(f"    {label:>16}   {ca:5d} {cb:5d}")
