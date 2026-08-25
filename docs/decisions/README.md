@@ -98,5 +98,10 @@ KAG_LlamaIndex `docs/audit/00-comparison.md` §6의 Q1~Q4. 이관 시 다음과 
 - `0002-drop-chain-traversal.md` — 2단계(사슬 순회) 폐기. 사전등록 임계 발동 (2026-08-24)
 - `0003-upstream-conclusions-corrected.md` — 선행 프로젝트가 결론 2건을 정정. 게이트
   질문을 "프롬프트로 잡히는가"에서 **"과잉거부 없이 잡히는가"**로 재정의 (2026-08-25)
+- `0004-pilot-passed-extraction-is-the-bottleneck.md` — 파일럿 통과. 주 타깃은 "확인 불가
+  판정", 병목은 판정이 아니라 **추출** (2026-08-25)
+- `0005-condition-type-enum-and-analysis-unit.md` — 조건 유형 열거값 **16종 + 기타** 확정
+  (축은 빈도순이 아니라 "사용자 상태로 O/X 판정 가능한가"). 분석 단위는 지표마다 다르게 —
+  닫힘률은 행, McNemar는 (조건문,기간) 쌍, CI는 조건문 클러스터 부트스트랩 (2026-08-25)
 
 나머지 확정 항목(위 §이미 정해진 것)은 아직 정식 기록으로 옮기지 않았다.
