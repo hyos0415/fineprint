@@ -35,30 +35,70 @@ CAP_HEADER = re.compile(
 EXCLUSIVE = re.compile(r"중복\s*적용\s*불가|중복적용\s*불가|중복\s*불가|중복\s*제외")
 # 규칙 G — 기간별 대안 항목. "3~5개월" "6~11개월" "12개월제" 같은 범위가 붙은 항목은
 # 우리 기간(12개월)을 포함하는 것만 센다. 적용 범위 밖 항목을 더하면 합계가 부푼다.
-# 가입기간을 가리키는 표기만 인식한다. "1개월 내 재신규" "3개월 내 잔액"처럼 조건 내부의
-# 시간 제약은 가입기간이 아니다 — 초판이 이걸 빼버려 항목 합계가 모자랐다(검토 중 발견).
-TERM_RANGE = re.compile(
-    r"(\d{1,2})\s*[~\-–]\s*(\d{1,2})\s*개월"      # 3~5개월
-    r"|(\d{1,2})\s*개월\s*제"                        # 12개월제
-    r"|(\d{1,2})\s*년\s*제?\s*[::]?"                # 1년제 / 1년:
-)
+# 가입기간 차등을 가리키는 표기만 인식한다. 셋 중 하나여야 한다.
+#   범위형   3~5개월
+#   "제"형   12개월제 · 1년제
+#   나열형   "1년: 0.6%p, 2년: 0.7%p" 처럼 한 줄에 기간 표기가 2개 이상
+# 단독 "5년이상"은 제외한다 — "거래기간 5년이상"처럼 가입기간이 아닌 경우가 있다(오탐).
+TERM_MONTH_RANGE = re.compile(r"(\d{1,2})\s*[~\-–]\s*(\d{1,2})\s*개월")
+TERM_EXPLICIT = re.compile(r"(\d{1,2})\s*개월\s*제|(\d{1,2})\s*년\s*제")
+TERM_LISTED = re.compile(r"(\d{1,2})\s*(개월|년)\s*(?:미만|이상|이내)?\s*[::,]?\s*(?=연?\s*\d)")
 TARGET_TERM = 12
 
 
-def term_applies(line: str, term: int = TARGET_TERM) -> bool:
-    """항목에 기간 범위가 붙어 있으면 우리 기간을 포함하는지 본다 (규칙 G)."""
-    hits = list(TERM_RANGE.finditer(line))
-    if not hits:
-        return True                               # 기간 표기가 없으면 적용 대상
-    for m in hits:
-        if m.group(1) and m.group(2):                 # N~M개월
-            if int(m.group(1)) <= term <= int(m.group(2)):
-                return True
-        elif m.group(3) and int(m.group(3)) == term:  # N개월제
-            return True
-        elif m.group(4) and int(m.group(4)) * 12 == term:   # N년제 / N년:
-            return True
-    return False
+def doc_has_term_tiers(text: str) -> bool:
+    """조건문 전체에 기간별 차등이 있는가.
+
+    차등이 한 줄 안에 나열되기도 하고("1년: 0.6, 2년: 0.7"), 줄 사이에 걸리기도 한다
+    ("1년미만 0.10 / 1년이상 0.20"). 그래서 나열형 표기는 **문서 단위로** 센다.
+    """
+    return len(TERM_LISTED.findall(text)) >= 2
+
+
+def _term_markers(line: str, term: int, listed_ok: bool = False) -> list[tuple[int, bool]]:
+    """(문자 위치, 우리 기간에 해당하는가) 목록. 비어 있으면 기간 표기가 없는 줄이다."""
+    found: list[tuple[int, bool]] = []
+    for m in TERM_MONTH_RANGE.finditer(line):
+        found.append((m.start(), int(m.group(1)) <= term <= int(m.group(2))))
+    for m in TERM_EXPLICIT.finditer(line):
+        months = int(m.group(1)) if m.group(1) else int(m.group(2)) * 12
+        found.append((m.start(), months == term))
+    listed = [(m.start(), (int(m.group(1)) * (12 if m.group(2) == "년" else 1)), m.group(0))
+              for m in TERM_LISTED.finditer(line)]
+    if len(listed) >= 2 or (listed_ok and listed):   # 문서에 차등이 있으면 한 개도 인정
+        for pos, months, raw in listed:
+            hit = months == term
+            if "미만" in raw:
+                hit = term < months
+            elif "이상" in raw:
+                hit = term >= months
+            found.append((pos, hit))
+    return sorted(found)
+
+
+def term_applies(line: str, term: int = TARGET_TERM, listed_ok: bool = False) -> bool:
+    """항목에 가입기간 차등이 붙어 있으면 우리 기간을 포함하는지 본다 (규칙 G)."""
+    markers = _term_markers(line, term, listed_ok)
+    return True if not markers else any(hit for _, hit in markers)
+
+
+def value_for_term(line: str, values: list[tuple[int, float]], term: int,
+                   listed_ok: bool = False) -> float:
+    """한 줄에 기간별 값이 여러 개면 우리 기간의 값을 고른다 (규칙 G′).
+
+    values 는 (문자 위치, 금리) 목록이다. 기간 표기가 없으면 최댓값을 쓴다(규칙 D).
+    """
+    markers = _term_markers(line, term, listed_ok)
+    if len(markers) < 2:
+        return max(v for _, v in values)
+    best = None
+    for pos, hit in markers:
+        if not hit:
+            continue
+        after = [v for p, v in values if p >= pos]      # 그 기간 표기 뒤에 오는 값
+        if after:
+            best = after[0] if best is None else max(best, after[0])
+    return best if best is not None else max(v for _, v in values)
 EACH_RATE = re.compile(r"각\s*(?:연\s*)?(\d+\.?\d*)\s*%\s*p?")
 RATE = re.compile(r"(\d+\.?\d*)\s*%\s*p?")
 BULLET = re.compile(r"^\s*(?:[-*·]|[①-⑳]|\d{1,2}\s*[.)]|[가-하]\s*[.)])")
@@ -80,11 +120,18 @@ def is_no_condition_literal(text: str) -> bool:
     return normalized == "" or normalized in NO_CONDITION_LITERALS
 
 
-def parse_bonus_items(text: str) -> tuple[list[float], float | None]:
-    """조건문에서 우대금리 항목 목록과 상한을 뽑는다 (규칙 B·C·D)."""
+def _rated_values(line: str) -> list[tuple[int, float]]:
+    """줄 안의 (위치, 금리) 목록. 우대금리로 볼 수 있는 범위만."""
+    return [(m.start(), float(m.group(1))) for m in RATE.finditer(line)
+            if 0 < float(m.group(1)) <= ITEM_RATE_MAX]
+
+
+def parse_bonus_items(text: str, term: int = TARGET_TERM) -> tuple[list[float], float | None]:
+    """조건문에서 우대금리 항목 목록과 상한을 뽑는다 (규칙 B·C·D·G·G′)."""
     items: list[float] = []
     cap: float | None = None
     pending = 0                                   # 금리 없이 나열된 항목 수
+    tiers = doc_has_term_tiers(text)               # 문서 전체에 기간 차등이 있는가
     for line in (ln.strip() for ln in re.split(r"[\n\r]+", text) if ln.strip()):
         if CAP_HEADER.search(line):               # B·B′ — 상한 헤더는 항목이 아니다
             found = RATE.search(line)
@@ -97,18 +144,18 @@ def parse_bonus_items(text: str) -> tuple[list[float], float | None]:
             items += [float(each.group(1))] * max(pending, 1)
             pending = 0
             continue
-        values = [v for v in (float(x) for x in RATE.findall(line)) if 0 < v <= ITEM_RATE_MAX]
+        values = _rated_values(line)
         if values:
-            if term_applies(line):                # G — 적용 기간 밖 항목은 세지 않는다
-                items.append(max(values))         # D — 줄 안에서는 최댓값 하나
+            if term_applies(line, term, tiers):   # G — 적용 기간 밖 항목은 세지 않는다
+                items.append(value_for_term(line, values, term, tiers))   # D·G′
             pending = 0
         elif BULLET.match(line):
             pending += 1
     return items, cap
 
 
-def declared_bonus(text: str) -> tuple[float, float | None]:
-    items, cap = parse_bonus_items(text)
+def declared_bonus(text: str, term: int = TARGET_TERM) -> tuple[float, float | None]:
+    items, cap = parse_bonus_items(text, term)
     total = sum(items)
     return (min(total, cap) if (items and cap is not None) else total), cap
 
@@ -118,11 +165,11 @@ def has_exclusive_group(text: str) -> bool:
     return bool(EXCLUSIVE.search(text))
 
 
-def classify(text: str, gap: float) -> str:
+def classify(text: str, gap: float, term: int = TARGET_TERM) -> str:
     """층을 판정한다. 자동 판정은 초안이며, 파일럿 30문항은 사람이 확인한다(§2 완화 조치)."""
     if is_no_condition_literal(text):
         return "조건없음"
-    items, cap = parse_bonus_items(text)
+    items, cap = parse_bonus_items(text, term)
     if not items:                                 # A — 금리 표기가 없다
         return "조건없음" if abs(gap) < 0.01 else "안닫힘"
     total = sum(items)
@@ -130,7 +177,7 @@ def classify(text: str, gap: float) -> str:
     return "닫힘" if abs(declared - gap) <= TOLERANCE else "안닫힘"
 
 
-def parse_items_with_text(text: str) -> list[dict]:
+def parse_items_with_text(text: str, term: int = TARGET_TERM) -> list[dict]:
     """우대 항목을 (라벨 문구, 금리)로 뽑는다.
 
     규칙 C 때문에 필요하다 — "각 연0.10%p"는 앞에 나열된 금리 없는 항목들에 나눠 붙는다.
@@ -138,6 +185,7 @@ def parse_items_with_text(text: str) -> list[dict]:
     """
     out: list[dict] = []
     pending: list[str] = []
+    tiers = doc_has_term_tiers(text)
     for line in (ln.strip() for ln in re.split(r"[\n\r]+", text) if ln.strip()):
         if CAP_HEADER.search(line):
             continue
@@ -150,10 +198,11 @@ def parse_items_with_text(text: str) -> list[dict]:
                 out.append({"label": line, "rate": rate, "via": "각N%p"})
             pending = []
             continue
-        values = [v for v in (float(x) for x in RATE.findall(line)) if 0 < v <= ITEM_RATE_MAX]
+        values = _rated_values(line)
         if values:
-            if term_applies(line):                # G
-                out.append({"label": line, "rate": max(values), "via": "직접"})
+            if term_applies(line, term, tiers):   # G
+                out.append({"label": line, "rate": value_for_term(line, values, term, tiers),
+                            "via": "직접"})
             pending = []
         elif BULLET.match(line):
             pending.append(line)
