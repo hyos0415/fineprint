@@ -207,3 +207,210 @@ def parse_items_with_text(text: str, term: int = TARGET_TERM) -> list[dict]:
         elif BULLET.match(line):
             pending.append(line)
     return out
+# ─────────────────────────────────────────────────────────────────────────────
+# v3 — 규칙 H·I (`../../docs/spec/prereg-05-rules-refinement.md` §3)
+#
+# v2(`parse_bonus_items`)는 **그대로 둔다.** 파일럿 30문항과 gold가 v2로 만들어졌고,
+# 고치면 그 결과를 재현할 수 없다. v3는 별도 함수로 두고 채점기에서 골라 쓴다.
+#
+# 규칙 H — 중첩 상한. 한 줄에 "최고/최대 N%p"가 있을 때
+#     항목 표시(①·1.·- 등)가 **있으면**  → 그 줄은 **항목**이고 기여값은 N이다 (항목별 상한)
+#     항목 표시가 **없으면**            → 그 줄은 **문서 상한**이다
+#   그리고 항목별 상한이 붙은 줄 뒤의 **더 깊은 층** 줄은 그 항목의 하위 상세이므로
+#   세지 않는다. "중복 적용 불가"가 붙은 줄도 같다 — 뒤따르는 ①② 는 그 항목의 대안이다.
+#
+# 규칙 I — 대안 묶음. 같은 축(회차·주차·일·개·명)으로 값이 나열되면 합이 아니라 최댓값이다.
+#   고객유형 머리글(신규고객/기존고객)로 갈린 묶음도 묶음별 합의 최댓값을 쓴다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 항목 표시의 깊이. 숫자 < 동그라미 < 기호 < 표시 없음 순으로 깊어진다.
+MARK_LEVELS = (
+    (1, re.compile(r"^\s*(?:\d{1,2}\s*[.)]|[가-하]\s*[.)])")),
+    (2, re.compile(r"^\s*[①-⑳]")),
+    (3, re.compile(r"^\s*[-*·▶※●○□■◆]")),
+)
+NO_MARK_LEVEL = 99
+SUBCAP = re.compile(r"(?:최고|최대)\s*(?:연\s*)?(\d+\.?\d*)\s*%")
+# 문서 상한을 선언하는 줄. **줄머리에 앵커를 건다** — `CAP_HEADER`는 앵커가 없어서
+# "1. 자동이체 입금횟수 우대금리 : 최고 0.5%p" 처럼 조건을 서술한 뒤 자기 상한을 붙인
+# 줄까지 문서 상한으로 삼켰다. 그게 규칙 H가 고치려는 오류다.
+#   상한 줄   "* 최고우대금리: 연0.45%p" · "* 우대이율 (최대 1.35%p)" · "최고 연 2.00%p"
+#   항목 줄   "1. 자동이체 입금횟수 우대금리 : 최고 0.5%p"  ← 앞에 조건 서술이 있다
+# 줄머리에서만 상한으로 본다 — 앞에 조건 서술이 오면 항목이다
+CAP_LINE = re.compile(
+    r"^(?:최대|최고)"
+    r"|^(?:우대|가산|추가)\s*(?:이?율|금리)(?:\s*최대한도)?\s*[:：(（]?\s*(?:최대|최고)"
+)
+# 줄 어디에 있어도 상한 선언인 형태 (v2 CAP_HEADER에 있던 것을 잇는다)
+#   "거래조건에 따라 최고 2.1%p 우대금리 적용"  ·  "합산 최대 연 0.2%p 우대"
+CAP_ANYWHERE = re.compile(
+    r"(?:최대|최고)\s*(?:연\s*)?\d+\.?\d*\s*%\s*p?\s*(?:추가|제공|우대|적용)"
+    r"|합산\s*(?:최대|최고)"
+)
+LEADING_MARK_CHARS = re.compile(
+    r"^[\s*※▶·\-●○□■◆①-⑳]*(?:(?:\d{1,2}|[가-하])\s*[.)]\s*)?")
+
+# ── 규칙 J — 기간 라벨 (`../../docs/spec/prereg-05-rules-refinement.md` §3) ──
+# 줄머리가 "12개월 …" · "1년제 …" 처럼 **기간 라벨로 시작**하면 그 줄은 그 기간의 것이다.
+# 기존 `TERM_LISTED`는 기간 뒤에 숫자가 바로 와야 잡히므로
+# "다. 12개월 특판 우대이율 : 0.55%" 같은 형태를 놓쳤다.
+#   J1  라벨이 하나뿐이고 우리 기간과 맞지 않으면 그 줄을 세지 않는다
+#   J2  라벨 + 최고/최대 가 함께 있으면 그 기간의 **문서 상한**이다 (항목이 아니다)
+TERM_LABEL_HEAD = re.compile(r"^(\d{1,2})\s*(개월|년)\s*(?:제)?\s*(이상|초과|미만|이하)?")
+TERM_LABEL_ANY = re.compile(r"(\d{1,2})\s*(개월|년)\s*(?:제)?")
+
+
+def _leading_term_applies(bare: str, term: int) -> bool | None:
+    """줄머리 기간 라벨이 우리 기간에 해당하는가. 라벨이 없거나 여럿이면 None."""
+    head = TERM_LABEL_HEAD.match(bare)
+    if not head or len(TERM_LABEL_ANY.findall(bare)) != 1:
+        return None
+    months = int(head.group(1)) * (12 if head.group(2) == "년" else 1)
+    bound = head.group(3)
+    if bound in ("이상", "초과"):
+        return term >= months
+    if bound in ("미만", "이하"):
+        return term <= months
+    return term == months
+# 대안 축 — 줄머리 라벨이 "숫자 + 단위"인 것만 본다. 문장 중간의 "6회이상"에 걸리지 않게.
+ALT_AXIS = re.compile(r"^\s*(?:[-*·▶※●○□■◆]|[①-⑳])?\s*(\d{1,3})\s*(회차|주차|일|개|명)(?![가-힣])")
+CUSTOMER_GROUP = re.compile(r"^\s*(신규고객|기존고객|개인형|기업형)\s*[:：]?\s*$")
+
+
+def _mark_level(line: str) -> int:
+    for level, pattern in MARK_LEVELS:
+        if pattern.match(line):
+            return level
+    return NO_MARK_LEVEL
+
+
+def parse_bonus_items_v3(text: str, term: int = TARGET_TERM) -> tuple[list[float], float | None]:
+    """우대금리 항목과 상한을 뽑는다 (규칙 B·C·D·G·G′ + H·I)."""
+    tiers = doc_has_term_tiers(text)
+    cap: float | None = None
+    groups: list[list[float]] = [[]]          # 고객유형 묶음. 기본은 하나
+    pending = 0                               # 금리 없이 나열된 항목 수 (규칙 C)
+    skip_deeper_than: int | None = None       # 규칙 H — 하위 상세를 건너뛴다
+    alt_run: list[tuple[int, float]] = []     # 규칙 I — (깊이, 금리)
+
+    def flush_alt() -> None:
+        """모인 대안 묶음을 최댓값 하나로 접는다 (규칙 I).
+
+        묶음이 한 줄뿐이면 대안이 아니라 그냥 항목이므로 `ITEM_RATE_MAX`를 다시 건다.
+        """
+        nonlocal alt_run
+        if len(alt_run) >= 2:
+            groups[-1].append(max(v for _, v in alt_run))
+        elif alt_run and alt_run[0][1] <= ITEM_RATE_MAX:
+            groups[-1].append(alt_run[0][1])
+        alt_run = []
+
+    for line in (ln.strip() for ln in re.split(r"[\n\r]+", text) if ln.strip()):
+        level = _mark_level(line)
+        if skip_deeper_than is not None and level > skip_deeper_than:
+            continue                          # 하위 상세 — 상위 항목에 이미 포함됐다
+        skip_deeper_than = None
+
+        if CUSTOMER_GROUP.match(line):        # 규칙 I — 고객유형 묶음이 열린다
+            flush_alt()
+            groups.append([])
+            pending = 0
+            continue
+
+        bare = LEADING_MARK_CHARS.sub("", line)
+
+        if _leading_term_applies(bare, term) is False:   # 규칙 J1 — 다른 기간의 줄이다
+            flush_alt()
+            pending = 0
+            continue
+
+        if TERM_LABEL_HEAD.match(bare) and SUBCAP.search(line):  # 규칙 J2 — 기간별 상한
+            flush_alt()
+            on_line = [(m.start(), float(m.group(1))) for m in RATE.finditer(line)
+                       if float(m.group(1)) > 0]
+            if on_line:
+                value = value_for_term(line, on_line, term, tiers)
+                cap = value if cap is None else max(cap, value)
+            pending = 0
+            continue
+
+        if CAP_LINE.match(bare) or CAP_ANYWHERE.search(line):   # 규칙 B — 상한 선언 줄
+            flush_alt()
+            found = RATE.search(line)
+            if found:
+                value = float(found.group(1))
+                cap = value if cap is None else max(cap, value)
+            pending = 0
+            continue
+
+        subcap = SUBCAP.search(line)
+        if subcap:
+            flush_alt()
+            # 기간 표기가 함께 있으면 기간에 맞는 값을 고른다 (규칙 G′). 항목별 상한 줄에도
+            # 기간별 값이 붙는다 — "최대 1.15% (3개월 0.80% / 6,9개월 0.90% / 12개월 1.15%)"
+            if _term_markers(line, term, tiers):
+                on_line = [(m.start(), float(m.group(1))) for m in RATE.finditer(line)
+                           if float(m.group(1)) > 0]
+                value = value_for_term(line, on_line, term, tiers) if on_line \
+                    else float(subcap.group(1))
+            else:
+                value = float(subcap.group(1))
+            if level == NO_MARK_LEVEL:            # 표시 없는 줄의 최고/최대는 문서 상한
+                cap = value if cap is None else max(cap, value)
+            else:                                 # 규칙 H — 항목별 상한
+                # ITEM_RATE_MAX를 걸지 않는다. 이 값은 공시가 "최대"라고 **명시한**
+                # 그 항목 묶음의 상한이므로, 한 항목으로 볼 수 있는 크기를 넘어도
+                # 정상이다 (예: "매일 우대금리 … (최대 연 3.10%p)").
+                if term_applies(line, term, tiers):
+                    groups[-1].append(value)
+                skip_deeper_than = level
+            pending = 0
+            continue
+
+        each = EACH_RATE.search(line)
+        if each:                              # 규칙 C — "각 연0.10%p"
+            flush_alt()
+            groups[-1] += [float(each.group(1))] * max(pending, 1)
+            pending = 0
+            continue
+
+        # 대안 묶음은 "둘 중 하나"이므로 최댓값이 한 항목 크기를 넘어도 정상이다
+        # (예: "31일 저금 성공 시 : 연 9.0%"). 그래서 축이 맞는 줄에는 상한을 걸지 않는다.
+        # 단 묶음이 한 줄뿐이면 대안이 아니므로 flush_alt()에서 상한을 다시 적용한다.
+        is_alt = bool(ALT_AXIS.match(line))
+        raw = [(m.start(), float(m.group(1))) for m in RATE.finditer(line)
+               if float(m.group(1)) > 0]
+        values = raw if is_alt else [v for v in raw if v[1] <= ITEM_RATE_MAX]
+        if not values:
+            if level != NO_MARK_LEVEL:
+                pending += 1                  # 금리 없이 나열된 항목
+            continue
+
+        pending = 0
+        if not term_applies(line, term, tiers):            # 규칙 G
+            flush_alt()
+            continue
+        rate = value_for_term(line, values, term, tiers)   # 규칙 D·G′
+        if is_alt:                                         # 규칙 I — 대안 축
+            if alt_run and alt_run[-1][0] != level:
+                flush_alt()
+            alt_run.append((level, rate))
+            continue
+        flush_alt()
+        groups[-1].append(rate)
+        if EXCLUSIVE.search(line):            # 규칙 H — 뒤따르는 ①② 는 이 항목의 대안이다
+            skip_deeper_than = level
+
+    flush_alt()
+    groups = [g for g in groups if g]
+    if not groups:
+        return [], cap
+    if len(groups) == 1:
+        return groups[0], cap
+    return max(groups, key=sum), cap         # 규칙 I — 고객유형 묶음은 합이 큰 쪽 하나
+
+
+def declared_bonus_v3(text: str, term: int = TARGET_TERM) -> tuple[float, float | None]:
+    items, cap = parse_bonus_items_v3(text, term)
+    total = sum(items)
+    return (min(total, cap) if (items and cap is not None) else total), cap
