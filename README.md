@@ -132,5 +132,14 @@ FINeprint          문제를 데이터로 정의 → 구조는 필요한 만큼�
 
 참고 저장소 (읽기만 하고 수정하지 않는다):
 
-- https://github.com/hyos0415/finance_verifier (선행, 완료)
-- https://github.com/hyos0415/KAG_LlamaIndex (선행, 보존)
+- https://github.com/hyos0415/finance_verifier — 검증기·클레임 분해 (선행, 완료)
+- https://github.com/hyos0415/KAG_LlamaIndex — 그래프 시도 (선행, 보존)
+- https://github.com/hyos0415/reranker_FT — 리랭커 PEFT (수치 철회 상태)
+
+## 라이선스
+
+[MIT](./LICENSE).
+
+**단, 인용한 공시 문구는 여기에 포함되지 않는다.** 이 저장소는 분석을 위해 금융회사의
+우대조건 원문과 상품설명서 일부를 인용한다. 그 문구의 권리는 각 금융회사에 있고,
+MIT 라이선스는 **우리가 쓴 코드와 문서**에만 적용된다.
