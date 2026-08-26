@@ -43,6 +43,7 @@
 | 3 | `docs/decisions/0009` | 왜 검증기에서 추천기로 바꿨나. 무엇이 살아남나 |
 | 4 | `docs/decisions/` | 정한 것과 폐기한 것. 반증 조건이 세 번 실제로 발동했다 |
 | 5 | `docs/spec/prereg-03`·`prereg-05` | 추출기 비교와 규칙 깎기. 방법론의 실제 사례 |
+| 6 | `docs/spec/prereg-06` | **지금 열려 있는 결정 넷.** 조건 매칭 규칙과 추천 판정 기준 |
 | — | `docs/spec/problem-v1-verifier.md` | 옛 정의. 보존용, **계획으로 읽지 않는다** |
 
 ## 먼저 알아둘 말
