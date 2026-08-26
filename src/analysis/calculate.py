@@ -343,6 +343,12 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     # 임계뿐 아니라 **못 판정한 모든 항목**을 되묻는다 (`decisions/0016`)
     questions = [q for q in (question_for(it, state) for it in rng["unknown"]) if q]
     caveat_codes = caveats_for(rng["unknown"], rng["met"], state)
+    # 답해도 금리가 안 바뀌면(범위 폭 0) 그 사유는 사용자에게 소음이다 — 뺀다.
+    # 우대금리가 0인 조건이거나 상한에 이미 걸린 경우다. 남기는 것은 실제로 금리를
+    # 낮출 수 있는 사유뿐이다 (이행필요·추첨·단계불명).
+    if rng["hi"] == rng["lo"]:
+        caveat_codes = [c for c in caveat_codes
+                        if c not in ("미응답", "수치필요", "모름")]
     base = row["base"]
     gross_lo, gross_hi = round(base + rng["lo"], 4), round(base + rng["hi"], 4)
     exempt = bool(state.get("_비과세종합저축_대상"))
@@ -403,8 +409,8 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
-    group, term, top, state_arg = "bank", 12, 10, ""
-    for flag in ("--group", "--term", "--top", "--state"):
+    group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
+    for flag in ("--group", "--term", "--top", "--state", "--sort"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -414,10 +420,14 @@ def main() -> None:
             term = int(v) if flag == "--term" else term
             top = int(v) if flag == "--top" else top
             state_arg = v if flag == "--state" else state_arg
+            order = v if flag == "--sort" else order
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
-                         "[--group bank|savingsbank] [--term 12] [--state 유형,유형] [--top 10]")
+                         "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
+                         "[--sort hi|lo] [--top 10]")
+    if order not in ("hi", "lo"):
+        raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
     stamp = argv[0]
     suffix = "" if group == "bank" else f"_{group}"
 
@@ -474,17 +484,34 @@ def main() -> None:
     if not scored:
         raise SystemExit(f"{term}개월 상품이 없다. --term 을 바꿔본다")
 
-    # 정렬은 세후 최소값 기준 — 확정된 값으로 줄을 세운다
-    scored.sort(key=lambda x: (-x["net_lo"], -x["net_hi"]))
+    # ── 정렬 (`decisions/0017`)
+    #
+    # 기본은 **최대 순**이다 — "조건을 다 채웠을 때 얼마인가" 로 줄을 세우고, 답을
+    # 받을수록 깎이며 후보가 바뀐다. 행원이 물어가며 좁히는 것과 같은 흐름이다.
+    #
+    # **최소 순으로 시작하면 사실상 기본금리 순이 된다.** 조건이 좋은 상품이 전부 묻힌다
+    # (카카오뱅크 우리아이적금은 최대 5.92%인데 최소 순 첫 화면에 안 보인다). 두 정렬의
+    # 첫 화면은 상위 3위가 0/3 겹치고, **전부 답하면 3/3 일치한다** — 끝점은 같고 다른
+    # 것은 무엇을 먼저 보여주는지다.
+    #
+    # 최대 순의 위험은 **첫 화면이 은행 광고와 같은 숫자**라는 것이다 (최대 = 공시
+    # 최고금리인 상품이 은행권 83.5% · 저축은행 96.3%). 그래서 두 가지를 강제한다.
+    #   1. 최대값을 단독으로 쓰지 않는다 — 항상 범위로 쓴다 (`design.md` 화면 계약)
+    #   2. 최대값 옆에 **남은 조건 수**를 붙인다 — 그 금리가 무료가 아님을 같이 보여준다
+    if order == "hi":
+        scored.sort(key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
+    else:
+        scored.sort(key=lambda x: (-x["net_lo"], -x["net_hi"], x["name"]))
     main = [s for s in scored if s["tier"] in MAIN_TIERS]
     rest = [s for s in scored if s["tier"] not in MAIN_TIERS]
 
     def show(items: list[dict], label: str) -> None:
         if not items:
             return
-        print(f"\n■ {label} ({len(items)})")
-        print(f"{'순':>3} {'상품':<26}{'세후':>15}{'세전':>14}  {'층':<11}조건")
-        print("-" * 102)
+        head = "다 채웠을 때 순" if order == "hi" else "확정된 값 순"
+        print(f"\n■ {label} ({len(items)}) · {head}")
+        print(f"{'순':>3} {'상품':<26}{'세후 확정~최대':>17}{'세전':>13}  {'층':<11}남은 조건")
+        print("-" * 104)
         for i, s in enumerate(items[:top], 1):
             span = (f"{s['net_lo']:.2f}" if s["net_lo"] == s["net_hi"]
                     else f"{s['net_lo']:.2f}~{s['net_hi']:.2f}")
@@ -501,8 +528,15 @@ def main() -> None:
                 note += f" [상한 {s['raw_hi']:.2f}->{s['gross_hi']:.2f}]"
             if s.get("caveats"):
                 note += "  주의:" + "·".join(s["caveats"])
-            print(f"{i:>3} {s['name'][:25]:<26}{span:>14}%{gspan:>13}%  {s['tier']:<11}"
-                  f"충족{s['n_met']} 미충족{s['n_unmet']} 모름{s['n_unknown']}{note}")
+            # 남은 조건 수를 금리 옆에 붙인다 — 최대값이 무료가 아님을 같이 보여준다
+            if s["net_hi"] > s["net_lo"]:
+                left = f"남은 {s['n_unknown']}개"
+            elif s["n_unknown"]:
+                left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
+            else:
+                left = f"확정 (충족{s['n_met']}/미충족{s['n_unmet']})"
+            print(f"{i:>3} {s['name'][:25]:<26}{span:>16}%{gspan:>12}%  {s['tier']:<11}"
+                  f"{left:<22}{note}")
 
     show(main, "메인 - 계산할 수 있는 상품")
     show(rest, "아래 섹션 - 주의가 붙는 상품")
