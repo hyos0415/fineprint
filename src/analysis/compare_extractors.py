@@ -61,7 +61,10 @@ def declared_llm(parsed: dict) -> tuple[float, float | None, int]:
     items = [it for it in parsed.get("items", []) if it.get("applies_to_term")]
     total, groups = 0.0, {}
     for it in items:
+        # 한 항목이 20%p 를 넘으면 금리가 아니다 — AI 가 금액을 rate 로 넣은 사례가 있다
+        # ("5천만원 이상 가입" → 5000 · 5000000). 관측된 정상 최대는 9.0%p 다.
         rate = float(it.get("rate") or 0)
+        rate = rate if 0 <= rate <= 20.0 else 0.0
         group = it.get("exclusive_group")
         if group:
             groups[group] = max(groups.get(group, 0.0), rate)

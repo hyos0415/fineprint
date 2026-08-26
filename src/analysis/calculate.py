@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -59,6 +60,38 @@ OUT_DIR = REPO_ROOT / "data" / "pilot"
 # 사용자가 O/X 로 답할 수 없는 유형 — `decisions/0005` 의 층 2
 ALWAYS_MET = {"무조건_특판_이벤트"}      # 가입고객 모두에게 적용된다
 UNDECIDABLE = {"판정불가_불특정"}         # 랜덤 지급 등. 공시로 판정할 수 없다
+
+# ── 금액·횟수 임계 (A안 · `../../docs/spec/prereg-06-matching-and-judgment.md` §1.3)
+#
+# 조건에 "3천만원 이상" · "6회 이상" 같은 임계가 붙어 있으면, 사용자가 "O" 라고
+# 답했더라도 충족인지 알 수 없다. **추측하지 않고 판정 불가로 두어 범위에 넣는다.**
+# 충족으로 계산하면 실제보다 높은 금리를 보여주고, 그게 잡으려던 실패다.
+#
+# 기간 한정("6개월 이상")은 여기서 빼는데, `applies_to_term` 이 이미 처리한다.
+# 넣으면 121건이 아니라 205건이 판정 불가가 되어 과하게 흐려진다.
+#
+# 실측 — 조건 항목 1,051개 중 121개(11.5%)  금액 58 · 횟수·인원 64 (겹침 1)
+THRESHOLD_MONEY = re.compile(r"\d[\d,]*\s*(만원|억원|천원|원)\b")
+THRESHOLD_COUNT = re.compile(r"\d+\s*(회|건|명|개|일|주차|좌)\s*(이상|이내|초과|미만|까지)")
+
+
+# 한 항목의 우대금리 상한. 이보다 크면 금리가 아니다 —
+# AI 가 "5천만원 이상 가입" 에서 5000 · 5000000 을 rate 로 뽑은 사례가 2건 있었다
+# (은행권 711개 항목 중 0.3%). 스키마에 상한이 없어 통과했다.
+# 예적금 우대금리 한 항목이 20%p 를 넘는 경우는 없다 — 관측 최대는 9.0%p 다.
+MAX_ITEM_RATE = 20.0
+
+
+def sane_rate(item: dict) -> float:
+    """항목의 금리. 상한을 넘으면 0으로 본다 (금액을 금리로 오인한 것)."""
+    r = float(item.get("rate") or 0)
+    return r if 0 <= r <= MAX_ITEM_RATE else 0.0
+
+
+def has_threshold(item: dict) -> bool:
+    """근거 문구에 금액·횟수 임계가 있는가. 있으면 사용자 답만으로 판정할 수 없다."""
+    ev = item.get("evidence") or ""
+    return bool(THRESHOLD_MONEY.search(ev) or THRESHOLD_COUNT.search(ev))
 
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
 #
@@ -106,6 +139,8 @@ def condition_met(item: dict, state: dict) -> bool | None:
     value = state.get(kind)
     if value is None:
         return None
+    if value and has_threshold(item):
+        return None          # A안 — 금액·횟수 임계가 붙으면 "O" 만으로는 판정 불가
     return (not value) if item.get("polarity") == "must_not_have" else bool(value)
 
 
@@ -120,7 +155,7 @@ def bonus_range(items: list[dict], cap: float | None, state: dict) -> dict:
     def total(chosen: list[dict]) -> float:
         plain, groups = 0.0, {}
         for it in chosen:
-            rate = float(it.get("rate") or 0)
+            rate = sane_rate(it)
             gid = it.get("exclusive_group")
             if gid:
                 groups[gid] = max(groups.get(gid, 0.0), rate)
@@ -145,15 +180,17 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     items = extracted.get("items", []) if extracted else []
     cap = extracted.get("cap") if extracted else None
     rng = bonus_range(items, cap, state)
+    n_threshold = sum(1 for it in rng["unknown"]
+                      if state.get(it.get("condition_type")) and has_threshold(it))
     base = row["base"]
     gross_lo, gross_hi = round(base + rng["lo"], 4), round(base + rng["hi"], 4)
     exempt = bool(state.get("_비과세종합저축_대상"))
 
     # 공시 최고금리를 조건으로 설명할 수 있는가 (닫힘률과 같은 판정)
-    declared_all = min(sum(float(i.get("rate") or 0)
-                          for i in items if i.get("applies_to_term")), cap) \
-        if (cap is not None and items) else sum(float(i.get("rate") or 0)
-                                                for i in items if i.get("applies_to_term"))
+    live_all = [i for i in items if i.get("applies_to_term")]
+    declared_all = sum(sane_rate(i) for i in live_all)
+    if cap is not None and live_all:
+        declared_all = min(declared_all, cap)
     unexplained = round(row["gap"] - declared_all, 3)
 
     # 공시 최고금리 상한. 사용자가 공시보다 많이 받을 수는 없다
@@ -166,8 +203,7 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     # 폭 0 을 먼저 가른다 — 이 행에서는 어떤 추출도 "넘침"이 된다 (0 보다 크면 초과다).
     # 여기 있는 상품을 `추출불확실` 로 묶으면 우리 잘못이 아닌 것을 우리 탓으로 표시한다.
     gap_zero = abs(row["gap"]) <= TOLERANCE
-    has_bonus = any(float(i.get("rate") or 0) > 0
-                    for i in items if i.get("applies_to_term"))
+    has_bonus = any(sane_rate(i) > 0 for i in items if i.get("applies_to_term"))
     if gap_zero:
         tier = "공시미반영" if has_bonus else "확정"
     elif not items:
@@ -187,6 +223,7 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "base": base, "disclosed_max": row["max"],
         "gross_lo": gross_lo, "gross_hi": gross_hi,
         "net_lo": net_lo, "net_hi": net_hi, "tax_rate": rate_used,
+        "n_threshold": n_threshold,
         "n_met": len(rng["met"]), "n_unmet": len(rng["unmet"]), "n_unknown": len(rng["unknown"]),
         "met": [i["condition_type"] for i in rng["met"]],
         "unmet": [i["condition_type"] for i in rng["unmet"]],
@@ -290,6 +327,10 @@ def main() -> None:
         if tiers[name]:
             mark = "메인" if name in MAIN_TIERS else "  "
             print(f"  {mark} {name:<11}{tiers[name]:>4}  {desc}")
+    n_thr = sum(s.get("n_threshold", 0) for s in scored)
+    if n_thr:
+        print(f"\n금액·횟수 임계 때문에 판정 불가가 된 조건 {n_thr}건 (A안 · prereg-06 §1.3)")
+        print("  사용자가 'O' 라고 답했어도 '3천만원 이상' 같은 임계는 확인할 수 없다")
     print(f"\n공시 최고금리 상한에 걸린 상품 {n_clamped}/{len(scored)}"
           f"   <- 상한이 없으면 공시에 없는 금리를 보여준다")
     print("상한은 증상만 막는다. 넘치는 상품은 우리 추출 문제이고 raw_hi 로 남겨 측정에 쓴다")
