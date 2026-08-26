@@ -71,7 +71,10 @@ UNDECIDABLE = {"판정불가_불특정"}         # 랜덤 지급 등. 공시로 
 # 넣으면 121건이 아니라 205건이 판정 불가가 되어 과하게 흐려진다.
 #
 # 실측 — 조건 항목 1,051개 중 121개(11.5%)  금액 58 · 횟수·인원 64 (겹침 1)
-THRESHOLD_MONEY = re.compile(r"\d[\d,]*\s*(만원|억원|천원|원)\b")
+# 단위 목록은 아래 MONEY_UNIT 과 같아야 한다 — 여기서 놓치면 임계인 줄 모르고
+# 사용자 답을 그대로 충족으로 세어 과대 진술이 된다.
+THRESHOLD_MONEY = re.compile(
+    r"\d[\d,]*\s*(천만원|백만원|십만원|억원|만원|천원|억|원)(?![가-힣])")
 THRESHOLD_COUNT = re.compile(r"\d+\s*(회|건|명|개|일|주차|좌)\s*(이상|이내|초과|미만|까지)")
 
 
@@ -92,6 +95,68 @@ def has_threshold(item: dict) -> bool:
     """근거 문구에 금액·횟수 임계가 있는가. 있으면 사용자 답만으로 판정할 수 없다."""
     ev = item.get("evidence") or ""
     return bool(THRESHOLD_MONEY.search(ev) or THRESHOLD_COUNT.search(ev))
+
+
+# ── B안 — 임계 수치를 파싱해 사용자에게 되묻는다 (`prereg-06` §1.3)
+#
+# A안은 임계가 붙은 조건을 판정 불가로 뒀다. B는 **수치를 물어서 판정한다.**
+# 재추출($1)이 필요할 줄 알았는데 **필요 없다** — 근거 문구에 숫자가 이미 있다.
+# 고유 임계 항목 56개 중 50개(89.3%)가 숫자 하나로 깔끔하게 파싱된다.
+#
+# 파싱되는 형태          "월 50만원 이상"  "자동이체 6회 이상"  "3천만원 이상 보유"
+# 파싱 안 되는 형태      계단식 우대 6건 — 아래 LADDER 주석
+#
+# 사용자 답은 상태 딕셔너리에 **단위를 붙인 키**로 받는다. 유형만 O/X 로 받으면
+# 금액인지 횟수인지 알 수 없어 엉뚱한 비교를 하게 된다.
+#     state["자동이체"] = True            "자동이체 하십니까"       → 예
+#     state["자동이체_횟수"] = 6           "월 몇 회 하십니까"       → 6회
+#     state["잔액_평잔_가입금액_금액"] = 5_000_000
+# 공시는 "5천만원" 처럼 한글 자릿수를 섞어 쓴다. **긴 단위를 먼저 시도해야 한다** —
+# "천만원"을 "만원"으로 읽으면 5천만원이 5만원이 된다 (1,000배 오차).
+MONEY_UNIT = {"원": 1, "천원": 1_000, "만원": 10_000,
+              "십만원": 100_000, "백만원": 1_000_000, "천만원": 10_000_000,
+              "억원": 100_000_000, "억": 100_000_000}
+MONEY_VALUE = re.compile(
+    r"(\d[\d,]*)\s*(천만원|백만원|십만원|억원|만원|천원|억|원)(?![가-힣])")
+COUNT_VALUE = re.compile(r"(\d+)\s*(?:회|건|명|개|일|주차|좌)\s*(이상|이내|초과|미만|까지)")
+AT_LEAST = re.compile(r"(이상|초과|부터)")
+AT_MOST = re.compile(r"(이내|미만|이하|까지)")
+
+
+def parse_threshold(item: dict) -> tuple[str, float, str] | None:
+    """근거 문구의 임계를 (단위, 값, 방향) 으로 읽는다. 애매하면 None 을 낸다.
+
+    **애매한 것을 추측하지 않는다.** 숫자가 둘 이상이면 어느 것이 임계인지 알 수
+    없으므로 판정 불가로 남긴다 — 대부분 계단식 우대다 (LADDER 주석 참고).
+    """
+    ev = item.get("evidence") or ""
+    hits = [("금액", int(m.group(1).replace(",", "")) * MONEY_UNIT[m.group(2)])
+            for m in MONEY_VALUE.finditer(ev)]
+    hits += [("횟수", int(m.group(1))) for m in COUNT_VALUE.finditer(ev)]
+    if len(hits) != 1:
+        return None
+    unit, value = hits[0]
+    return unit, float(value), "최소" if AT_LEAST.search(ev) or not AT_MOST.search(ev) else "최대"
+
+
+# 계단식 우대 — 하나의 조건에 임계가 여러 개이고 금리도 단계별로 다르다.
+#
+#     "자동이체 입금횟수 우대금리 : 최고 0.5%p - 5회이상 : 0.2%p,
+#      10회이상 : 0.3%p, 15회이상 0.5%p"
+#
+# **추출기가 이걸 항목 하나로 접었다** (가장 높은 금리만 남겼다). 스키마에 단계를
+# 담을 자리가 없기 때문이다. 고유 임계 항목 56개 중 6개(10.7%)가 여기 해당한다.
+# 지금은 판정 불가로 남긴다 — 사용자 답이 10회면 0.3%p 인데 우리는 0.5%p 만 안다.
+# 스키마에 `tiers` 를 넣을지는 열린 결정이다 (`prereg-06` §1.6).
+
+
+def threshold_question(item: dict) -> tuple[str, str, float, str] | None:
+    """이 조건을 판정하려면 무엇을 물어야 하는가. (상태 키, 단위, 값, 방향)"""
+    parsed = parse_threshold(item)
+    if parsed is None:
+        return None
+    unit, value, direction = parsed
+    return f"{item.get('condition_type')}_{unit}", unit, value, direction
 
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
 #
@@ -140,7 +205,16 @@ def condition_met(item: dict, state: dict) -> bool | None:
     if value is None:
         return None
     if value and has_threshold(item):
-        return None          # A안 — 금액·횟수 임계가 붙으면 "O" 만으로는 판정 불가
+        # B안 — 임계 수치를 물어서 받았으면 비교한다. 없으면 판정 불가(A안과 같다)
+        q = threshold_question(item)
+        if q is None:
+            return None                       # 계단식 우대 등 — 임계가 하나가 아니다
+        key, _unit, need, direction = q
+        got = state.get(key)
+        if not isinstance(got, (int, float)) or isinstance(got, bool):
+            return None                       # 아직 안 물어봤다
+        ok = got >= need if direction == "최소" else got <= need
+        return (not ok) if item.get("polarity") == "must_not_have" else ok
     return (not value) if item.get("polarity") == "must_not_have" else bool(value)
 
 
@@ -180,8 +254,17 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     items = extracted.get("items", []) if extracted else []
     cap = extracted.get("cap") if extracted else None
     rng = bonus_range(items, cap, state)
-    n_threshold = sum(1 for it in rng["unknown"]
-                      if state.get(it.get("condition_type")) and has_threshold(it))
+    thr_unknown = [it for it in rng["unknown"]
+                   if state.get(it.get("condition_type")) and has_threshold(it)]
+    n_threshold = len(thr_unknown)
+    # 되물으면 판정할 수 있는 것과, 물어도 판정할 수 없는 것(계단식)을 가른다
+    ask, ladder = [], 0
+    for it in thr_unknown:
+        q = threshold_question(it)
+        if q is None:
+            ladder += 1
+        else:
+            ask.append(q)
     base = row["base"]
     gross_lo, gross_hi = round(base + rng["lo"], 4), round(base + rng["hi"], 4)
     exempt = bool(state.get("_비과세종합저축_대상"))
@@ -223,7 +306,8 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "base": base, "disclosed_max": row["max"],
         "gross_lo": gross_lo, "gross_hi": gross_hi,
         "net_lo": net_lo, "net_hi": net_hi, "tax_rate": rate_used,
-        "n_threshold": n_threshold,
+        "n_threshold": n_threshold, "n_ladder": ladder,
+        "ask": [{"key": k, "unit": u, "need": v, "direction": d} for k, u, v, d in ask],
         "n_met": len(rng["met"]), "n_unmet": len(rng["unmet"]), "n_unknown": len(rng["unknown"]),
         "met": [i["condition_type"] for i in rng["met"]],
         "unmet": [i["condition_type"] for i in rng["unmet"]],
@@ -257,11 +341,29 @@ def main() -> None:
     suffix = "" if group == "bank" else f"_{group}"
 
     # 사용자 상태: --state 에 적은 유형만 true, 나머지는 모름(None)
+    #   유형              → 그 조건을 한다 (O)
+    #   유형_횟수=6        → 월 6회 한다        (B안 · 임계 비교에 쓴다)
+    #   유형_금액=50만원    → 평잔 50만원        (만원·억원 단위를 그대로 쓸 수 있다)
     picked = [s.strip() for s in state_arg.split(",") if s.strip()]
-    unknown_names = [p for p in picked if p not in CONDITION_TYPES]
+    unknown_names = [q.partition("=")[0].strip() for q in picked]
+    unknown_names = [q for q in unknown_names if q not in CONDITION_TYPES
+                     and not (q.rpartition("_")[2] in ("금액", "횟수")
+                              and q.rpartition("_")[0] in CONDITION_TYPES)]
     if unknown_names:
         raise SystemExit(f"모르는 조건 유형: {unknown_names}\n가능한 값: {CONDITION_TYPES}")
-    state = {t: True for t in picked}
+    state = {}
+    for tok in picked:
+        name, _, raw = tok.partition("=")
+        name, raw = name.strip(), raw.strip()
+        if not raw:
+            state[name] = True
+            continue
+        m = re.fullmatch(r"(\d[\d,]*)\s*(억원|만원|천원|원)?", raw)
+        if not m:
+            raise SystemExit(f"수치를 읽을 수 없다: {tok}")
+        state[name] = float(int(m.group(1).replace(",", ""))
+                            * MONEY_UNIT.get(m.group(2) or "원", 1))
+        state.setdefault(name.rpartition("_")[0], True)   # 수치를 답했으면 그 조건은 한다
     tax = load_tax()
 
     rows, pairs = load_pairs(stamp, group)
@@ -327,6 +429,36 @@ def main() -> None:
         if tiers[name]:
             mark = "메인" if name in MAIN_TIERS else "  "
             print(f"  {mark} {name:<11}{tiers[name]:>4}  {desc}")
+    # 되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기는지 큰 것부터
+    # 질문은 **유형 하나에 하나**다 — 상품마다 임계가 달라도 "월 몇 회 하십니까"는 한 번
+    # 물으면 되고, 비교는 상품별로 각자 한다. 키별로 묶고 임계값은 목록으로 보여준다.
+    asks: dict[str, dict] = {}
+    for s in scored:
+        for q in s.get("ask", []):
+            slot = asks.setdefault(q["key"], {"unit": q["unit"], "codes": set(),
+                                              "needs": set(), "dirs": set()})
+            slot["codes"].add(s["code"])
+            slot["needs"].add(q["need"])
+            slot["dirs"].add(q["direction"])
+    if asks:
+        print("\n되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 (B안 · prereg-06 §1.3)")
+        def fmt(need: float, unit: str) -> str:
+            if unit != "금액":
+                return f"{need:,.0f}회"
+            return f"{need / 10000:,.0f}만원" if need >= 10000 else f"{need:,.0f}원"
+
+        ordered = sorted(asks.items(), key=lambda kv: -len(kv[1]["codes"]))
+        for key, slot in ordered[:10]:
+            needs = " · ".join(fmt(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
+            more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}"
+            print(f"    {key:<30}상품 {len(slot['codes']):>3}개   임계 {needs}{more}"
+                  f"  ({'/'.join(sorted(slot['dirs']))})")
+        print(f"    → --state '{ordered[0][0]}=<값>' 으로 답한다")
+    n_ladder = sum(s.get("n_ladder", 0) for s in scored)
+    if n_ladder:
+        print(f"\n물어도 판정할 수 없는 조건 {n_ladder}건 — 계단식 우대다")
+        print('    "5회이상 0.2%p, 10회이상 0.3%p, 15회이상 0.5%p" 처럼 단계마다 금리가 다른데')
+        print("    추출 스키마에 단계를 담을 자리가 없어 가장 높은 금리만 남아 있다")
     n_thr = sum(s.get("n_threshold", 0) for s in scored)
     if n_thr:
         print(f"\n금액·횟수 임계 때문에 판정 불가가 된 조건 {n_thr}건 (A안 · prereg-06 §1.3)")
