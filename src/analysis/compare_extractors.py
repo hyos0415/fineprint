@@ -12,6 +12,11 @@
 McNemar를 돌리면 같은 텍스트를 평균 14.5번 세는 것이고 p값이 실제보다 작아져 B의 우위를
 과대 판정한다.
 
+**방향별로 보고한다** — 닫힘률이 절댓값만 보면 "넘쳤는지 모자랐는지"가 감춰진다.
+`0007` 에서 은행권 마이너스 6건을 후순위로 미뤘는데, 저축은행에서는 그게 주된 유형
+이라는 것을 `E10` 에서야 알았다. 그리고 넘침의 대부분은 **폭 0 행**에서 나온다 —
+거기서는 어떤 추출도 넘치므로 진짜 과다 추출과 구분해 세야 한다.
+
 표준 라이브러리만 쓴다 (scipy 없이 McNemar 정확검정·Wilcoxon·부트스트랩을 직접 계산).
 
 사용법:
@@ -177,12 +182,16 @@ def main() -> None:
         else:
             b_sum, b_cap, b_n = 0.0, None, 0
         # 항목 0개도 산수 판정을 받는다 (사전등록 §3 정의 그대로 · decisions/0007)
+        # 부호를 함께 담는다 — 절댓값만 보면 넘침과 모자람을 구분할 수 없다
+        a_signed, b_signed = round(a_sum - row["gap"], 3), round(b_sum - row["gap"], 3)
         a_diff, b_diff = abs(a_sum - row["gap"]), abs(b_sum - row["gap"])
         scored.append({**row, "text": pair["text"],
                        "a_sum": a_sum, "a_cap": a_cap, "a_n": a_n,
-                       "a_diff": round(a_diff, 3), "a_closed": a_diff <= TOLERANCE,
+                       "a_diff": round(a_diff, 3), "a_signed": a_signed,
+                       "a_closed": a_diff <= TOLERANCE,
                        "b_sum": b_sum, "b_cap": b_cap, "b_n": b_n,
-                       "b_diff": round(b_diff, 3), "b_closed": b_diff <= TOLERANCE,
+                       "b_diff": round(b_diff, 3), "b_signed": b_signed,
+                       "b_closed": b_diff <= TOLERANCE,
                        "schema_ok": got["schema_ok"]})
     for got in llm["pairs"]:
         if got["schema_ok"]:
@@ -280,7 +289,33 @@ def main() -> None:
     print(f"    스키마 위반     {bad_schema}/{len(llm['pairs'])} 쌍")
 
     print()
-    print("□ 불일치 폭 분포 (|합계 − 실제폭|)")
+    print("□ 방향별 실패 — 넘침과 모자람은 원인이 다르다")
+    print(f"    {'':<12}{'A 규칙':>16}{'B 스키마':>16}")
+    for label, test in (("넘침 (더 뽑음)", lambda v: v > TOLERANCE),
+                        ("모자람",         lambda v: v < -TOLERANCE),
+                        ("맞음",           lambda v: abs(v) <= TOLERANCE)):
+        ca = sum(1 for r in scored if test(r["a_signed"]))
+        cb = sum(1 for r in scored if test(r["b_signed"]))
+        print(f"    {label:<12}{ca:>8} ({ca / n * 100:>4.1f}%){cb:>8} ({cb / n * 100:>4.1f}%)")
+
+    # 넘침의 대부분은 폭 0 행에서 나온다 — 거기서는 어떤 추출도 넘친다 (E10)
+    zero = [r for r in scored if r["gap"] == 0]
+    a_over_zero = sum(1 for r in zero if r["a_signed"] > TOLERANCE)
+    b_over_zero = sum(1 for r in zero if r["b_signed"] > TOLERANCE)
+    a_over = sum(1 for r in scored if r["a_signed"] > TOLERANCE)
+    b_over = sum(1 for r in scored if r["b_signed"] > TOLERANCE)
+    if a_over or b_over:
+        print()
+        print("    넘침 중 '폭 = 0' 행이 차지하는 비중 (E10 — 여기서는 어떤 추출도 넘친다)")
+        print(f"      A  {a_over_zero}/{a_over}"
+              f"{f' = {a_over_zero / a_over * 100:.1f}%' if a_over else ''}"
+              f"   → 진짜 과다 추출 {a_over - a_over_zero}행")
+        print(f"      B  {b_over_zero}/{b_over}"
+              f"{f' = {b_over_zero / b_over * 100:.1f}%' if b_over else ''}"
+              f"   → 진짜 과다 추출 {b_over - b_over_zero}행")
+
+    print()
+    print("□ 불일치 폭 분포 (절댓값 · 참고)")
     print(f"    {'구간':>16}   {'A':>5} {'B':>5}")
     for lo_d, hi_d in ((0.0, 0.06), (0.06, 0.3), (0.3, 1.0), (1.0, 3.0), (3.0, 1e9)):
         ca = sum(1 for r in scored if lo_d < r["a_diff"] <= hi_d)
