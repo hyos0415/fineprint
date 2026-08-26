@@ -158,6 +158,55 @@ def threshold_question(item: dict) -> tuple[str, str, float, str] | None:
     unit, value, direction = parsed
     return f"{item.get('condition_type')}_{unit}", unit, value, direction
 
+
+def question_for(item: dict, state: dict) -> dict | None:
+    """판정 못 한 항목을 **되물을 질문**으로 바꾼다. 물어도 소용없으면 None.
+
+    **문구를 그대로 인용한다.** 우리가 요약하면 사용자가 판단할 근거를 빼앗는다 —
+    "ESG 실천 우대금리 1.00%" 처럼 공시가 무엇을 하라는지 안 밝힌 조건도, 원문을
+    보여주고 "충족하십니까 / 모르겠습니다" 를 받는 것이 우리가 대신 추측하는 것보다 낫다.
+    """
+    kind = item.get("condition_type")
+    if kind in UNDECIDABLE:
+        return None                      # 추첨·랜덤 — 사용자도 은행도 미리 모른다
+    answered = state.get(kind)
+    if answered == UNSURE:
+        return None                      # 이미 물었고 "모르겠다" 였다
+    if answered and has_threshold(item):
+        q = threshold_question(item)
+        if q is None:
+            return None                  # 계단식 — 수치를 받아도 금리를 모른다
+        key, unit, need, direction = q
+        return {"key": key, "kind": kind, "unit": unit, "need": need,
+                "direction": direction, "evidence": item.get("evidence") or ""}
+    if answered is None:
+        return {"key": kind, "kind": kind, "unit": "예아니오", "need": None,
+                "direction": None, "evidence": item.get("evidence") or ""}
+    return None
+
+
+def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -> list[str]:
+    """왜 확정하지 못했는지 · 무엇을 주의해야 하는지 사유 코드로 모은다."""
+    out = []
+    for it in items_unknown:
+        kind = it.get("condition_type")
+        if kind in UNDECIDABLE:
+            out.append("추첨")
+        elif state.get(kind) == UNSURE:
+            out.append("모름")
+        elif state.get(kind) and has_threshold(it):
+            out.append("수치필요" if threshold_question(it) else "단계불명")
+        else:
+            out.append("미응답")
+    if any(it.get("condition_type") in ONGOING for it in items_met):
+        out.append("이행필요")
+    seen, uniq = set(), []
+    for c in out:                        # 순서를 지키면서 중복만 뺀다
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
 #
 # `공시미반영` 을 따로 둔 이유 (E10, 2026-08-26)
@@ -178,6 +227,32 @@ TIERS = {
     "계산불가":    "조건 항목을 하나도 뽑지 못했다",
 }
 MAIN_TIERS = ("확정", "범위")            # 메인 화면에 올리는 층
+
+# ── 못 채운 사유 (`decisions/0016`)
+#
+# 조건을 판정하지 못하는 이유가 넷이고, **셋은 되물어서 없앨 수 있다.**
+# 없앨 수 없는 둘은 우리가 모르는 게 아니라 **공시가 안 알려주는 것**이다.
+# 그럴 때는 조용히 빼지 않고 "이 사유로 실제 금리가 다를 수 있다"고 말한다.
+#
+#   되물으면 없어진다      안 물어봄 · 수치를 안 받음 · 사용자가 모른다고 답함
+#   되물어도 안 없어진다   추첨·랜덤 지급 · 단계별 금리가 공시에 안 나옴
+CAVEAT = {
+    "미응답":    "답하지 않은 조건이 있습니다. 답하면 금리가 확정됩니다",
+    "수치필요":  "금액·횟수를 답하면 금리가 확정됩니다",
+    "모름":      "사용자가 모른다고 답한 조건이 있어 금리를 확정할 수 없습니다",
+    "추첨":      "추첨·랜덤으로 주는 우대금리가 포함돼 있어 실제 금리는 더 낮을 수 있습니다",
+    "단계불명":  "충족 정도에 따라 금리가 달라지는 조건이 있는데 공시에 단계가 다 나와 있지 "
+                 "않습니다. 실제 금리는 표시된 최대보다 낮을 수 있습니다",
+    "이행필요":  "가입 후 계속 실천해야 받는 우대금리가 포함돼 있습니다. 중단하면 그만큼 낮아집니다",
+}
+
+# 가입 후에 계속 해야 하는 유형 — 답을 받았어도 "이행 조건" 을 붙여 보여준다.
+# 사용자가 "대중교통 이용하겠다" 고 답한 것은 사실이 아니라 **약속**이다.
+ONGOING = {"실천_미션_인증", "자동이체", "카드실적", "급여_연금이체", "목표달성_납입실적"}
+
+# 사용자가 "모르겠다" 고 답한 것을 표시하는 값. 안 물어본 것(None)과 구분해야
+# 되물을 목록에서 뺄 수 있다 — 이미 물었고 답이 "모름" 이면 다시 물어도 소용없다.
+UNSURE = "모름"
 
 # 사용자에게 보여줄 문장 — 층마다 말이 달라야 한다
 TIER_MESSAGE = {
@@ -202,7 +277,7 @@ def condition_met(item: dict, state: dict) -> bool | None:
     if kind in UNDECIDABLE:
         return None
     value = state.get(kind)
-    if value is None:
+    if value is None or value == UNSURE:
         return None
     if value and has_threshold(item):
         # B안 — 임계 수치를 물어서 받았으면 비교한다. 없으면 판정 불가(A안과 같다)
@@ -265,6 +340,9 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
             ladder += 1
         else:
             ask.append(q)
+    # 임계뿐 아니라 **못 판정한 모든 항목**을 되묻는다 (`decisions/0016`)
+    questions = [q for q in (question_for(it, state) for it in rng["unknown"]) if q]
+    caveat_codes = caveats_for(rng["unknown"], rng["met"], state)
     base = row["base"]
     gross_lo, gross_hi = round(base + rng["lo"], 4), round(base + rng["hi"], 4)
     exempt = bool(state.get("_비과세종합저축_대상"))
@@ -307,6 +385,9 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "gross_lo": gross_lo, "gross_hi": gross_hi,
         "net_lo": net_lo, "net_hi": net_hi, "tax_rate": rate_used,
         "n_threshold": n_threshold, "n_ladder": ladder,
+        "questions": questions,
+        "caveats": caveat_codes,
+        "caveat_text": [CAVEAT[c] for c in caveat_codes],
         "ask": [{"key": k, "unit": u, "need": v, "direction": d} for k, u, v, d in ask],
         "n_met": len(rng["met"]), "n_unmet": len(rng["unmet"]), "n_unknown": len(rng["unknown"]),
         "met": [i["condition_type"] for i in rng["met"]],
@@ -357,6 +438,9 @@ def main() -> None:
         name, raw = name.strip(), raw.strip()
         if not raw:
             state[name] = True
+            continue
+        if raw == UNSURE:                 # "유형=모름" — 물었지만 답을 모른다
+            state[name] = UNSURE
             continue
         m = re.fullmatch(r"(\d[\d,]*)\s*(억원|만원|천원|원)?", raw)
         if not m:
@@ -415,6 +499,8 @@ def main() -> None:
                 note = f" 조건문 우대 {-s['unexplained_pp']:.2f}%p (공시 미반영)"
             if s["clamped"]:
                 note += f" [상한 {s['raw_hi']:.2f}->{s['gross_hi']:.2f}]"
+            if s.get("caveats"):
+                note += "  주의:" + "·".join(s["caveats"])
             print(f"{i:>3} {s['name'][:25]:<26}{span:>14}%{gspan:>13}%  {s['tier']:<11}"
                   f"충족{s['n_met']} 미충족{s['n_unmet']} 모름{s['n_unknown']}{note}")
 
@@ -430,39 +516,64 @@ def main() -> None:
             mark = "메인" if name in MAIN_TIERS else "  "
             print(f"  {mark} {name:<11}{tiers[name]:>4}  {desc}")
     # 되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기는지 큰 것부터
-    # 질문은 **유형 하나에 하나**다 — 상품마다 임계가 달라도 "월 몇 회 하십니까"는 한 번
-    # 물으면 되고, 비교는 상품별로 각자 한다. 키별로 묶고 임계값은 목록으로 보여준다.
+    # ── 되물을 질문 (`decisions/0016`)
+    #
+    # **모르면 전부 되묻는다.** 질문은 유형 하나에 하나다 — 상품마다 임계가 달라도
+    # "월 몇 회 하십니까" 는 한 번 물으면 되고 비교는 상품별로 각자 한다.
+    # 근거 문구를 그대로 인용해서, 공시가 애매한 조건도 사람이 판단할 수 있게 한다.
     asks: dict[str, dict] = {}
     for s in scored:
-        for q in s.get("ask", []):
+        for q in s.get("questions", []):
             slot = asks.setdefault(q["key"], {"unit": q["unit"], "codes": set(),
-                                              "needs": set(), "dirs": set()})
+                                              "needs": set(), "kind": q["kind"],
+                                              "evidence": set()})
             slot["codes"].add(s["code"])
-            slot["needs"].add(q["need"])
-            slot["dirs"].add(q["direction"])
-    if asks:
-        print("\n되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 (B안 · prereg-06 §1.3)")
-        def fmt(need: float, unit: str) -> str:
-            if unit != "금액":
-                return f"{need:,.0f}회"
-            return f"{need / 10000:,.0f}만원" if need >= 10000 else f"{need:,.0f}원"
+            if q["need"] is not None:
+                slot["needs"].add(q["need"])
+            if q["evidence"]:
+                slot["evidence"].add(q["evidence"][:74])
 
+    def fmt(need: float, unit: str) -> str:
+        if unit != "금액":
+            return f"{need:,.0f}회"
+        return f"{need / 10000:,.0f}만원" if need >= 10000 else f"{need:,.0f}원"
+
+    if asks:
+        print()
+        print("되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 (decisions/0016)")
         ordered = sorted(asks.items(), key=lambda kv: -len(kv[1]["codes"]))
-        for key, slot in ordered[:10]:
-            needs = " · ".join(fmt(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
-            more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}"
-            print(f"    {key:<30}상품 {len(slot['codes']):>3}개   임계 {needs}{more}"
-                  f"  ({'/'.join(sorted(slot['dirs']))})")
-        print(f"    → --state '{ordered[0][0]}=<값>' 으로 답한다")
+        for key, slot in ordered[:12]:
+            if slot["needs"]:
+                needs = " · ".join(fmt(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
+                more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}"
+                tail = f"임계 {needs}{more}"
+            else:
+                tail = "예 / 아니오 / 모르겠다"
+            print(f"    {key:<30}상품 {len(slot['codes']):>3}개   {tail}")
+            for ev in sorted(slot["evidence"])[:2]:
+                print(f"        공시 문구  \"{ev}\"")
+        if len(ordered) > 12:
+            print(f"    ... 그리고 {len(ordered) - 12}개 더")
+        print(f"    → --state '{ordered[0][0]}=<값>' · 모르면 '{ordered[0][0]}=모름'")
+
+    # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
+    codes = Counter(c for s in scored for c in s.get("caveats", []))
+    hard = [c for c in ("추첨", "단계불명", "모름") if codes[c]]
+    if hard:
+        print()
+        print("되물어도 못 채우는 사유 — 이 문장을 사용자에게 보여준다")
+        for c in hard:
+            print(f"    {c:<10}상품 {codes[c]:>3}개")
+            print(f"        \"{CAVEAT[c]}\"")
+    if codes["이행필요"]:
+        print()
+        print(f"이행 조건이 붙는 상품 {codes['이행필요']}개")
+        print(f'        "{CAVEAT["이행필요"]}"')
     n_ladder = sum(s.get("n_ladder", 0) for s in scored)
     if n_ladder:
         print(f"\n물어도 판정할 수 없는 조건 {n_ladder}건 — 계단식 우대다")
         print('    "5회이상 0.2%p, 10회이상 0.3%p, 15회이상 0.5%p" 처럼 단계마다 금리가 다른데')
         print("    추출 스키마에 단계를 담을 자리가 없어 가장 높은 금리만 남아 있다")
-    n_thr = sum(s.get("n_threshold", 0) for s in scored)
-    if n_thr:
-        print(f"\n금액·횟수 임계 때문에 판정 불가가 된 조건 {n_thr}건 (A안 · prereg-06 §1.3)")
-        print("  사용자가 'O' 라고 답했어도 '3천만원 이상' 같은 임계는 확인할 수 없다")
     print(f"\n공시 최고금리 상한에 걸린 상품 {n_clamped}/{len(scored)}"
           f"   <- 상한이 없으면 공시에 없는 금리를 보여준다")
     print("상한은 증상만 막는다. 넘치는 상품은 우리 추출 문제이고 raw_hi 로 남겨 측정에 쓴다")
