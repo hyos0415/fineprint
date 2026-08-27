@@ -126,6 +126,23 @@ SYSTEM_PROMPT = """한국 예금·적금 공시의 우대조건 문구에서 **�
    "최근 1년간 예적금 미보유"는 유형 자체가 이력 없음을 뜻하므로 required다.
 8. 조건문에 **없는 값을 만들지 않는다.** 금리는 적힌 숫자만 쓴다.
 
+## 유형을 고르는 원리 — 먼저 이걸 대 본다
+
+아래 목록에 딱 맞는 말이 없어도 **원리로 판정한다.** 목록은 예시이지 전부가 아니다.
+
+- 조건이 **사용자가 누구인가**로 갈리면 → `고객군_자격`
+  (나이·가족 구성·직업·자격·신분 등 **가입 시점에 이미 정해져 있어 바꾸기 어려운 속성**.
+   아래 목록의 "연령·다자녀·중소기업 근로자·VIP·단체가입"을 일반화한 것이다)
+- 조건이 **사용자가 무엇을 했는가**로 갈리면 → `실천_미션_인증`
+  (참여·기부·서약·인증·홍보·미션 수행 등 **행동**. 단 아래 특정 유형에 해당하면 그쪽이 먼저다)
+- 조건에 **제3자나 코드가 끼어 있으면** → `쿠폰_코드_추천인`
+  (추천인·소개·쿠폰·우대코드·전자명함처럼 **누군가를 거쳐 가입**하는 경로)
+- 조건이 **돈이 들어오는 것**이면 → `급여_연금이체`
+  (급여·연금·소득·사업 대금 등 **입금의 성격**이 핵심이면 명칭이 달라도 여기다)
+
+`기타`는 **위 16종의 원리를 전부 대 봤는데도 안 맞을 때만** 쓴다.
+목록에 그 단어가 없다는 이유로 `기타`를 고르지 않는다.
+
 ## condition_type — 아래 17개 중 하나만 고른다
 
 층 1 (사용자 상태로 O/X 판정 가능)
@@ -250,7 +267,13 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
-    group, limit = "bank", None
+    group, limit, label = "bank", None, ""
+    if "--label" in argv:
+        i = argv.index("--label")
+        if i + 1 >= len(argv):
+            raise SystemExit("--label 값이 없다")
+        label = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
     for flag, cast in (("--group", str), ("--limit", int)):
         if flag in argv:
             i = argv.index(flag)
@@ -261,7 +284,7 @@ def main() -> None:
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/extract_llm.py YYYYMMDD "
-                         "[--group bank|savingsbank] [--limit N]")
+                         "[--group bank|savingsbank] [--limit N] [--label v2]")
     stamp = argv[0]
 
     rows, pairs = load_pairs(stamp, group)
@@ -303,7 +326,8 @@ def main() -> None:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "" if group == "bank" else f"_{group}"
-    out = OUT_DIR / f"extract_llm{suffix}_{stamp}.json"
+    tag = f"_{label}" if label else ""     # 직전 결과를 덮어쓰지 않는다 (`prereg-07` §5)
+    out = OUT_DIR / f"extract_llm{tag}{suffix}_{stamp}.json"
     out.write_text(json.dumps({
         "label": "llm-restricted-schema", "model_id": MODEL_ID, "snapshot": stamp,
         "group": group, "temperature": TEMPERATURE, "max_tokens": MAX_TOKENS,
