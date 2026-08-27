@@ -41,7 +41,7 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
     if not llm_path.exists():
         raise SystemExit(f"추출 결과가 없다: {llm_path.relative_to(C.REPO_ROOT)}")
     rows, _ = load_pairs(stamp, group)
-    llm = json.loads(llm_path.read_text(encoding="utf-8"))
+    llm, _ = C.unify_types(json.loads(llm_path.read_text(encoding="utf-8")))
     return ([r for r in rows if r["term"] == term],
             {p["pair_id"]: p for p in llm["pairs"]})
 

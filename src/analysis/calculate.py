@@ -219,6 +219,69 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
             uniq.append(c)
     return uniq
 
+# ── 자기일관성 — 같은 문구는 같은 유형으로 통일한다 (`decisions/0020`)
+#
+# **무엇을 고치나** — 추출기가 **같은 근거 문구를 행마다 다른 유형으로** 분류한다.
+# 고유 문구 372종 중 **9종 · 항목 47개(4.5%)**가 그렇다.
+#
+#     12개   "신규고객 또는 정기예금 중도해지고객 우대이율 0.75%p"  {첫거래 6, 주거래 6}
+#      4개   "아파트관리비 이체"                       {급여_연금이체 2, 기타 1, 자동이체 1}
+#      4개   "출산예정인자-배우자 포함"                  {고객군_자격 3, 기타 1}
+#      3개   "온라인.재예치우대"                       {주거래 2, 비대면_채널가입 1}
+#
+# 같은 문구인데 상품마다 다른 질문으로 가면, **어떤 상품은 되묻고 어떤 상품은 안 묻는다.**
+# 사용자가 보는 화면이 이유 없이 갈린다.
+#
+# **이건 별칭 사전이 아니다.** `CLAUDE.md` 5번이 금지한 것은 손으로 쓴 매핑표
+# (`"아파트관리비 이체"` -> `자동이체`)다. 여기서 쓰는 것은 **데이터에 이미 있는 표**이고,
+# 사람이 정하는 값이 하나도 없다. 다수결이 바뀌면 표도 따라 바뀐다.
+#
+# **한계를 분명히 적는다 — 이 규칙은 분산을 줄이지 편향을 줄이지 않는다.**
+# `"아파트관리비 이체"`는 다수결이 `급여_연금이체`(2표)로 가는데 **틀린 답**이다
+# (아파트관리비는 자동이체다). 4:1로 흔들리던 것이 **4:0으로 일관되게 틀리는** 것으로
+# 바뀐다. 화면은 일관돼지고 정답률은 그대로다. 정답률을 올리려면 추출을 고쳐야 한다
+# (`prereg-07` · A군 재추출).
+#
+# **동점이면 손대지 않는다.** 6:6인 문구가 하나 있는데(`"신규고객 또는 정기예금
+# 중도해지고객..."`), 다수결로 정할 근거가 없으면 정하지 않는다. 그게 이 프로젝트가
+# 반복해 온 규칙이다 — 모르는 것을 추측하지 않는다.
+
+
+def unify_types(llm: dict) -> tuple[dict, dict]:
+    """같은 근거 문구에 붙은 유형을 다수결로 통일한다. (바뀐 payload, 통계)"""
+    votes: dict[str, Counter] = {}
+    for p in llm.get("pairs", []):
+        for it in (p.get("parsed") or {}).get("items", []) or []:
+            ev = (it.get("evidence") or "").strip()
+            if ev:
+                votes.setdefault(ev, Counter())[it.get("condition_type")] += 1
+    winner, tied = {}, 0
+    for ev, c in votes.items():
+        if len(c) < 2:
+            continue
+        top = c.most_common()
+        if len(top) > 1 and top[0][1] == top[1][1]:
+            tied += 1                     # 동점 — 근거가 없으면 정하지 않는다
+            continue
+        winner[ev] = top[0][0]
+    n_changed = 0
+    for p in llm.get("pairs", []):
+        parsed = p.get("parsed") or {}
+        items = parsed.get("items")
+        if not items:
+            continue
+        new = []
+        for it in items:
+            ev = (it.get("evidence") or "").strip()
+            want = winner.get(ev)
+            if want and want != it.get("condition_type"):
+                it = {**it, "condition_type": want}
+                n_changed += 1
+            new.append(it)
+        parsed["items"] = new
+    return llm, {"문구": len(winner), "동점": tied, "바뀐 항목": n_changed}
+
+
 # ── 조건이 아닌 문구를 걸러낸다 (`decisions/0019` · `prereg-06` §1.8)
 #
 # **무엇을 잡나** — 공시가 **금리 숫자만 적고 무슨 조건인지 안 밝힌 문구**다.
@@ -591,6 +654,7 @@ def main() -> None:
         raise SystemExit(f"추출 결과가 없다: {llm_path.relative_to(REPO_ROOT)}\n"
                          f"먼저 extract_llm.py 를 돌린다")
     llm = json.loads(llm_path.read_text(encoding="utf-8"))
+    llm, unified = unify_types(llm)          # 같은 문구는 같은 유형으로 (`decisions/0020`)
     by_pair = {p["pair_id"]: p for p in llm["pairs"]}
 
     scored = []
@@ -605,6 +669,9 @@ def main() -> None:
     print(f"가입기간     {term}개월 · 스냅샷 {stamp} ({group})")
     print(f"세율         {tax['일반과세']['합계'] * 100:.1f}% · {tax['적용_시점']} "
           f"· 확인 상태 {tax['확인_상태']}")
+    if unified["바뀐 항목"]:
+        print(f"유형 통일     문구 {unified['문구']}종 · 항목 {unified['바뀐 항목']}개 "
+              f"(동점이라 남긴 문구 {unified['동점']}종) · decisions/0020")
     print(f"대상 상품    {len(scored)}\n")
     if not scored:
         raise SystemExit(f"{term}개월 상품이 없다. --term 을 바꿔본다")
