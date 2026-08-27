@@ -377,6 +377,61 @@ ASK_BUDGET = 12          # 평가에 반영하는 질문 개수. 수확 체감�
 # 합쳐 예산을 아끼는 우회를 막는다. 수치 후속 질문(`_금액`·`_횟수`)은 별도로 센다.
 
 
+# ── 상태바 — 남은 질문이 절대 늘어나지 않게 한다 (`decisions/0024`)
+#
+# **문제** — `rank_questions()` 는 **지금 물을 수 있는** 질문만 낸다. 유형에 "예" 라고
+# 답하면 수치 후속 질문이 새로 생기므로 **남은 수가 늘어난다.** 실측으로 은행권 6곳 ·
+# 저축은행 12곳에서 줄지 않거나 늘었다 (15번째 뒤 5개 → 16번째 뒤 6개).
+#
+# 상태바가 뒤로 가면 사용자는 "끝이 안 나는구나" 로 읽는다.
+#
+# **해법 — 처음부터 "모두 예" 를 가정한 최대치를 분모로 쓴다.** 그러면 답할 때마다
+# 남은 수가 **구조적으로** 줄어든다. "아니오"·"모르겠다" 는 그 유형의 수치 후속까지
+# 같이 지우므로 2~3개씩 줄어든다 — 조건을 못 채우는 사용자일수록 빨리 끝난다.
+#
+#     은행권 22개 = 유형 15 + 수치 후속 7      저축은행 27개 = 유형 13 + 수치 후속 14
+#
+# 이 집합은 **아무것도 안 물은 상태에서 추출 데이터만으로 미리 계산된다.** 시뮬레이션이
+# 필요 없다. 실측으로 전부 답했을 때의 실제 질문 수(22 · 27)와 정확히 일치한다.
+
+
+def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
+    """`{조건 유형: {수치 후속 질문 키}}`. "모두 예" 를 가정한 최대 질문 집합이다."""
+    plan: dict[str, set[str]] = {}
+    for row in rows:
+        got = by_pair.get(row["pair_id"])
+        if not got or not got.get("schema_ok"):
+            continue
+        for it in (got["parsed"].get("items") or []):
+            if not it.get("applies_to_term"):
+                continue
+            verdict = no_condition(it)
+            if verdict == "제외":
+                continue
+            kind = UNCLEAR_TYPE if verdict == "조건불명" else it.get("condition_type")
+            if kind in UNDECIDABLE or kind in ALWAYS_MET:
+                continue                      # 물어도 소용없다 — 추첨·항상 충족
+            plan.setdefault(kind, set())
+            q = threshold_question(it) if has_threshold(it) else None
+            if q:
+                plan[kind].add(q[0])
+    return plan
+
+
+def questions_left(plan: dict[str, set[str]], state: dict) -> int:
+    """화면에 띄울 남은 질문 수. 이 값은 답할 때마다 절대 늘어나지 않는다."""
+    n = 0
+    for kind, subs in plan.items():
+        answered = state.get(kind)
+        if answered is None:
+            n += 1 + len(subs)                # 아직 안 물었다 — 후속까지 상정한다
+        elif answered is False or answered == UNSURE:
+            n += 0                            # 아니다/모른다 — 후속도 물을 필요가 없다
+        else:
+            n += sum(1 for s in subs if s not in state)
+    return n
+
+
 def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
     """되물을 질문을 **고정된 우선순위**로 줄 세운다. 위 주석이 그 규칙이다."""
     asks: dict[str, dict] = {}
@@ -450,6 +505,17 @@ ONGOING = {"실천_미션_인증", "자동이체", "카드실적", "급여_연�
 # 사용자가 "모르겠다" 고 답한 것을 표시하는 값. 안 물어본 것(None)과 구분해야
 # 되물을 목록에서 뺄 수 있다 — 이미 물었고 답이 "모름" 이면 다시 물어도 소용없다.
 UNSURE = "모름"
+
+# 사용자가 "아니오" 라고 답한 것. `condition_met()` 은 처음부터 `False` 를 처리했는데
+# **입력 경로가 없었다** — `--state` 가 True·숫자·`모름` 만 만들었다. 그래서 지금까지
+# 모든 측정이 "예" 로만 답한 사용자였다 (`decisions/0024`).
+#
+# **"모르겠다" 와 "아니오" 는 lo 에서 완전히 같고 hi 에서만 다르다.**
+#     lo = group_totals(met)          충족 확인된 것만 더한다 — 모름도 아니오도 안 들어간다
+#     hi = group_totals(met+unknown)  모름은 들어가고 아니오는 안 들어간다
+# 그래서 과대 진술 방어선은 **lo** 다. 모름을 아니오로 바꿔 hi 까지 내리면 방어가 아니라
+# **단정**이 된다 — 아무것도 모른다고 답한 사용자에게 확정 65/67 이 나온다 (`0024` 실측).
+DENY = "아니오"
 
 # 사용자에게 보여줄 문장 — 층마다 말이 달라야 한다
 TIER_MESSAGE = {
@@ -690,6 +756,8 @@ def main() -> None:
 
     # 사용자 상태: --state 에 적은 유형만 true, 나머지는 모름(None)
     #   유형              → 그 조건을 한다 (O)
+    #   유형=아니오         → 안 한다 (X). hi 에서도 빠진다 (`decisions/0024`)
+    #   유형=모름          → 물었지만 모른다. lo 에서만 빠지고 hi 에는 남는다
     #   유형_횟수=6        → 월 6회 한다        (B안 · 임계 비교에 쓴다)
     #   유형_금액=50만원    → 평잔 50만원        (만원·억원 단위를 그대로 쓸 수 있다)
     picked = [s.strip() for s in state_arg.split(",") if s.strip()]
@@ -708,6 +776,9 @@ def main() -> None:
             continue
         if raw == UNSURE:                 # "유형=모름" — 물었지만 답을 모른다
             state[name] = UNSURE
+            continue
+        if raw == DENY:                   # "유형=아니오" — 안 한다. hi 에서도 빠진다
+            state[name] = False
             continue
         m = re.fullmatch(r"(\d[\d,]*)\s*(억원|만원|천원|원)?", raw)
         if not m:
@@ -802,6 +873,26 @@ def main() -> None:
     show(main, "메인 - 계산할 수 있는 상품")
     show(rest, "아래 섹션 - 주의가 붙는 상품")
 
+    # ── 상태바 — 숫자 둘을 나란히 놓는다 (`decisions/0024`)
+    #
+    # 남은 질문 수 **하나만** 보여주면 "모르겠다" 가 "아니오" 와 똑같이 진전으로 보인다.
+    # 둘 다 질문을 지우지만 "모르겠다" 는 금리를 하나도 좁히지 못한다. 실측으로 끝까지
+    # 갔을 때 확정이 **예 64 · 아니오 65 · 모르겠다 4** 다 — 확정 수가 그 차이를 정확히
+    # 가른다. 나란히 놓으면 사용자가 "모르겠다" 의 대가를 **스스로 보고**, 우리가 답을
+    # 강요하지는 않는다.
+    plan = question_plan([r for r in rows if r["term"] == term], by_pair)
+    left_n = questions_left(plan, state)
+    total_n = questions_left(plan, {})
+    n_fixed = sum(1 for s in main if s["tier"] == "확정")
+    done = total_n - left_n
+    bar_w = 40
+    filled = 0 if not total_n else round(done / total_n * bar_w)
+    print("\n" + "-" * 102)
+    print(f"진행       [{'#' * filled}{'.' * (bar_w - filled)}]  "
+          f"답한 질문 {done}/{total_n} · 남은 질문 {left_n}개")
+    print(f"성과       금리가 정해진 상품 {n_fixed}/{len(main)}개"
+          f"   <- '모르겠다' 는 이 숫자를 움직이지 못한다")
+
     tiers = Counter(s["tier"] for s in scored)
     n_clamped = sum(1 for s in scored if s["clamped"])
     print("\n" + "-" * 102)
@@ -844,7 +935,8 @@ def main() -> None:
             print(f"    --- 여기까지가 평가 예산 {ASK_BUDGET}개 ---")
             print(f"    ... 그리고 {len(ordered) - ASK_BUDGET}개 더 "
                   f"(물어도 되지만 평가 지표에는 안 들어간다)")
-        print(f"    → --state '{ordered[0][0]}=<값>' · 모르면 '{ordered[0][0]}=모름'")
+        print(f"    → --state '{ordered[0][0]}=<값>' · 안 하면 '{ordered[0][0]}=아니오'"
+              f" · 모르면 '{ordered[0][0]}=모름'")
 
     # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
     codes = Counter(c for s in scored for c in s.get("caveats", []))
