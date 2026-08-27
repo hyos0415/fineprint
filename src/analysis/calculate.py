@@ -207,6 +207,48 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
             uniq.append(c)
     return uniq
 
+# ── 질문 예산과 우선순위 (`../../docs/spec/prereg-06-matching-and-judgment.md` §2.3(1))
+#
+# **왜 예산이 필요한가** — 되묻기를 넣으니 은행권 범위가 0이 됐다. 그런데 실측해 보니
+# **메인 층 수는 질문에 전혀 안 변하고**(은행권 64 고정), **범위 폭 평균은 질문 수의
+# 단조 감소 함수**였다. 즉 "질문을 많이 만들면 지표가 좋아진다" 는 구멍이 열려 있었다.
+# 선행 저장소에서 `"UNSUPPORTED"` 만 반환하는 상수 스텁이 1·2·3순위 지표를 전부 이긴
+# 것과 같은 구조다. **답할 리 없는 질문 25개를 만들어도 확정률은 오른다.**
+#
+# 그래서 **질문 개수를 재기 전에 못 박고, 예산 안에서만 지표를 잰다**(`decisions/0018`).
+# 예산을 넘는 질문은 화면에 띄우든 말든 자유지만 **평가 지표에는 안 들어간다.**
+ASK_BUDGET = 12          # 평가에 반영하는 질문 개수. 수확 체감이 여기서 꺾인다
+
+# **우선순위 규칙도 같이 못 박는다.** 안 그러면 "상위 12개" 를 사후에 고르는 우회가
+# 생긴다 — 결과를 보고 유리한 질문 12개를 상위로 올리면 예산 제약이 무력해진다.
+#
+#   1순위   상품 커버리지 내림차순 — 그 질문 하나가 판정을 여는 상품 수
+#   2순위   질문 키 사전순 — **내용에 무관한 기준을 일부러 골랐다.** 금리 크기 같은
+#           의미 있는 기준을 2순위로 두면 시스템이 추출값을 키워 순위를 밀어올릴 수 있다
+#
+# 동점은 실제로 예산 경계에 걸린다 — 은행권 11·12위가 둘 다 7상품(`고객군_자격`·`기타`),
+# 저축은행 11·12위가 둘 다 4상품이다. **누가 예산 안에 드는지를 2순위가 정한다.**
+#
+# 질문 하나의 단위는 **조건 유형 하나**다(`decisions/0016`). 유형 여러 개를 한 질문으로
+# 합쳐 예산을 아끼는 우회를 막는다. 수치 후속 질문(`_금액`·`_횟수`)은 별도로 센다.
+
+
+def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
+    """되물을 질문을 **고정된 우선순위**로 줄 세운다. 위 주석이 그 규칙이다."""
+    asks: dict[str, dict] = {}
+    for s in scored:
+        for q in s.get("questions", []):
+            slot = asks.setdefault(q["key"], {"unit": q["unit"], "codes": set(),
+                                              "needs": set(), "kind": q["kind"],
+                                              "evidence": set()})
+            slot["codes"].add(s["code"])
+            if q["need"] is not None:
+                slot["needs"].add(q["need"])
+            if q["evidence"]:
+                slot["evidence"].add(q["evidence"][:74])
+    return sorted(asks.items(), key=lambda kv: (-len(kv[1]["codes"]), kv[0]))
+
+
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
 #
 # `공시미반영` 을 따로 둔 이유 (E10, 2026-08-26)
@@ -555,28 +597,21 @@ def main() -> None:
     # **모르면 전부 되묻는다.** 질문은 유형 하나에 하나다 — 상품마다 임계가 달라도
     # "월 몇 회 하십니까" 는 한 번 물으면 되고 비교는 상품별로 각자 한다.
     # 근거 문구를 그대로 인용해서, 공시가 애매한 조건도 사람이 판단할 수 있게 한다.
-    asks: dict[str, dict] = {}
-    for s in scored:
-        for q in s.get("questions", []):
-            slot = asks.setdefault(q["key"], {"unit": q["unit"], "codes": set(),
-                                              "needs": set(), "kind": q["kind"],
-                                              "evidence": set()})
-            slot["codes"].add(s["code"])
-            if q["need"] is not None:
-                slot["needs"].add(q["need"])
-            if q["evidence"]:
-                slot["evidence"].add(q["evidence"][:74])
+    #
+    # 순서는 `rank_questions()` 가 정한다 — **고정된 규칙이다**(`decisions/0018`).
+    # 여기서 임의로 다시 정렬하면 예산 제약이 무력해진다.
+    ordered = rank_questions(scored)
 
     def fmt(need: float, unit: str) -> str:
         if unit != "금액":
             return f"{need:,.0f}회"
         return f"{need / 10000:,.0f}만원" if need >= 10000 else f"{need:,.0f}원"
 
-    if asks:
+    if ordered:
         print()
-        print("되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 (decisions/0016)")
-        ordered = sorted(asks.items(), key=lambda kv: -len(kv[1]["codes"]))
-        for key, slot in ordered[:12]:
+        print(f"되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 "
+              f"(decisions/0016 · 평가 예산 {ASK_BUDGET}개 · decisions/0018)")
+        for key, slot in ordered[:ASK_BUDGET]:
             if slot["needs"]:
                 needs = " · ".join(fmt(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
                 more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}"
@@ -586,8 +621,10 @@ def main() -> None:
             print(f"    {key:<30}상품 {len(slot['codes']):>3}개   {tail}")
             for ev in sorted(slot["evidence"])[:2]:
                 print(f"        공시 문구  \"{ev}\"")
-        if len(ordered) > 12:
-            print(f"    ... 그리고 {len(ordered) - 12}개 더")
+        if len(ordered) > ASK_BUDGET:
+            print(f"    --- 여기까지가 평가 예산 {ASK_BUDGET}개 ---")
+            print(f"    ... 그리고 {len(ordered) - ASK_BUDGET}개 더 "
+                  f"(물어도 되지만 평가 지표에는 안 들어간다)")
         print(f"    → --state '{ordered[0][0]}=<값>' · 모르면 '{ordered[0][0]}=모름'")
 
     # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
