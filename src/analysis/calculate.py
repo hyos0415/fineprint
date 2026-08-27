@@ -59,7 +59,12 @@ OUT_DIR = REPO_ROOT / "data" / "pilot"
 
 # 사용자가 O/X 로 답할 수 없는 유형 — `decisions/0005` 의 층 2
 ALWAYS_MET = {"무조건_특판_이벤트"}      # 가입고객 모두에게 적용된다
-UNDECIDABLE = {"판정불가_불특정"}         # 랜덤 지급 등. 공시로 판정할 수 없다
+
+# 공시가 우대금리 금액만 적고 **무슨 조건인지 안 밝힌** 항목에 붙이는 유형
+# (`no_condition()` · `decisions/0019`). 추출 스키마의 17종에는 없다 — 추출기가 내는
+# 값이 아니라 **우리가 판정 단계에서 붙이는 라벨**이라서 섞이면 안 된다.
+UNCLEAR_TYPE = "조건불명_공시미기재"
+UNDECIDABLE = {"판정불가_불특정", UNCLEAR_TYPE}   # 물어도 판정할 수 없다
 
 # ── 금액·횟수 임계 (A안 · `../../docs/spec/prereg-06-matching-and-judgment.md` §1.3)
 #
@@ -73,8 +78,13 @@ UNDECIDABLE = {"판정불가_불특정"}         # 랜덤 지급 등. 공시로 
 # 실측 — 조건 항목 1,051개 중 121개(11.5%)  금액 58 · 횟수·인원 64 (겹침 1)
 # 단위 목록은 아래 MONEY_UNIT 과 같아야 한다 — 여기서 놓치면 임계인 줄 모르고
 # 사용자 답을 그대로 충족으로 세어 과대 진술이 된다.
+# **띄어쓰기가 없어도 잡아야 한다.** `(?![가-힣])` 만 두면 `"1천만원이상"` 이
+# 안 잡혀서, 임계인 줄 모르고 사용자 "예" 답을 그대로 충족으로 세게 된다
+# (36건 · 3.4% · 광주 27 · 안양 6 · 경남 3 — `decisions/0019`). 과대 진술 방향이다.
+# `prereg-06` §1.1 이 `천만원` 단위 누락으로 겪은 것과 **같은 종류의 두 번째 구멍**이다.
 THRESHOLD_MONEY = re.compile(
-    r"\d[\d,]*\s*(천만원|백만원|십만원|억원|만원|천원|억|원)(?![가-힣])")
+    r"\d[\d,]*\s*(천만원|백만원|십만원|억원|만원|천원|억|원)"
+    r"(?:\s*(?:이상|이하|미만|초과|까지))?(?![가-힣])")
 THRESHOLD_COUNT = re.compile(r"\d+\s*(회|건|명|개|일|주차|좌)\s*(이상|이내|초과|미만|까지)")
 
 
@@ -190,8 +200,10 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
     out = []
     for it in items_unknown:
         kind = it.get("condition_type")
-        if kind in UNDECIDABLE:
-            out.append("추첨")
+        if kind == UNCLEAR_TYPE:
+            out.append("조건불명")       # 공시가 조건을 안 적었다 — 우리 잘못이 아니다
+        elif kind in UNDECIDABLE:
+            out.append("추첨")           # 랜덤·추첨 — 은행도 미리 모른다
         elif state.get(kind) == UNSURE:
             out.append("모름")
         elif state.get(kind) and has_threshold(it):
@@ -206,6 +218,56 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
             seen.add(c)
             uniq.append(c)
     return uniq
+
+# ── 조건이 아닌 문구를 걸러낸다 (`decisions/0019` · `prereg-06` §1.8)
+#
+# **무엇을 잡나** — 공시가 **금리 숫자만 적고 무슨 조건인지 안 밝힌 문구**다.
+# 사람이 표본 40건을 읽다가 나왔다.
+#
+#     "우대이율 6개월 이상 2.20%"        부산은행. 이게 조건문의 전부다
+#     "계약기간 24개월 이상"             가입기간이다. applies_to_term 이 처리할 자리
+#     "12개월 정기예금(대면) 기본금리(연 3.70%)+ 기본 우대금리(연 0.10%)"
+#
+# **왜 그냥 두면 안 되나** — 셋 다 사용자 화면에서 나쁜 방향으로 샌다.
+#   `기타` 로 갔으면          "해당되십니까" 를 묻고, "예" 면 2.20%p 를 다 준 것으로 센다
+#   `무조건_특판_이벤트` 로 갔으면  **아무것도 안 물어도 항상 충족**이다. 4건이 여기 있었다
+# 공시가 무슨 조건인지 한 글자도 안 적었는데 우리가 "받는다" 고 계산해 보여주는 것이다.
+# 이 프로젝트가 막으려던 피해 사례가 정확히 그 모양이다.
+#
+# **규칙 — 문구를 하드코딩하지 않는다.** 숫자와 껍데기 말을 걷어내고 **아무것도 안
+# 남으면** 그건 조건이 아니다. `기타` 40건 중 정확히 13건을 집어낸다(넘치지도 모자라지도
+# 않는다). 재추출이 필요 없어 비용은 $0 이다.
+#
+#     "우대이율 6개월 이상 2.20%"  ->  ""              조건 아님
+#     "계약기간 24개월 이상"        ->  ""              조건 아님
+#     "소중한 날"                 ->  "소중한날"        조건이다. 묻는다
+#     "아파트관리비 이체"           ->  "아파트관리비이체"  조건이다
+#
+# **금액·횟수 임계가 붙은 것은 제외한다.** "1천만원 이상" 은 숫자를 걷어내면 빈 문자열이
+# 되지만 **진짜 조건**이다. `has_threshold()` 로 먼저 걸러야 오탐이 안 난다.
+#
+# 남은 것을 둘로 가른다 — **금리 표기가 있느냐**로 가른다.
+#   금리가 없다  "계약기간 24개월 이상"     항목 자체가 아니다.  **뺀다**
+#   금리가 있다  "우대이율 6개월 이상 2.20%" 금액은 공시가 알려줬다. **금리는 남기고
+#                                        판정 불가로 둔다** — 빼면 정보가 사라진다
+NO_COND_NUM = re.compile(
+    r"\d[\d,\.]*\s*(?:%p|%|개월|년|일|회|건|명|개|원|만원|천만원|억원|점|p)?")
+NO_COND_SHELL = re.compile(
+    r"(우대이율|우대금리|기본금리|기본|정기예금|정기적금|계약기간|가입기간|"
+    r"최대|최고|최저|이상|미만|이하|초과|연|제|대면|비대면|적용|해당|"
+    r"금리|이율|주기|변동|회전|시|의|및|또는|등|\(|\)|:|·|~|\+|-|,|\s)")
+HAS_RATE = re.compile(r"\d[\d,\.]*\s*%")
+
+
+def no_condition(item: dict) -> str | None:
+    """조건이 아닌 문구인가. `"제외"` · `"조건불명"` · None 중 하나를 낸다."""
+    if has_threshold(item):
+        return None                        # "1천만원 이상" — 숫자를 걷어내도 진짜 조건이다
+    ev = item.get("evidence") or ""
+    if NO_COND_SHELL.sub("", NO_COND_NUM.sub("", ev)).strip():
+        return None                        # 무언가 남았다 — 사용자에게 물을 말이 있다
+    return "조건불명" if HAS_RATE.search(ev) else "제외"
+
 
 # ── 질문 예산과 우선순위 (`../../docs/spec/prereg-06-matching-and-judgment.md` §2.3(1))
 #
@@ -286,6 +348,13 @@ CAVEAT = {
     "단계불명":  "충족 정도에 따라 금리가 달라지는 조건이 있는데 공시에 단계가 다 나와 있지 "
                  "않습니다. 실제 금리는 표시된 최대보다 낮을 수 있습니다",
     "이행필요":  "가입 후 계속 실천해야 받는 우대금리가 포함돼 있습니다. 중단하면 그만큼 낮아집니다",
+    # 되물어도 없앨 수 없는 셋째 사유 (`decisions/0019`). 앞의 둘과 성격이 다르다 —
+    # 우리가 못 읽은 것도, 사용자가 모르는 것도 아니고 **공시가 안 적은 것**이다.
+    # 그래서 문장이 갈 곳을 알려주며 끝나야 한다. 우리가 대신 추측하지 않는 대신,
+    # 사용자를 막다른 길에 세워두지도 않는다.
+    "조건불명":  "우대금리 금액은 공시에 있는데 무슨 조건을 채워야 받는지는 나와 있지 "
+                 "않습니다. 표시된 최대 금리를 실제로 받을 수 있는지 은행에 전화해 "
+                 "확인해 보세요",
 }
 
 # 가입 후에 계속 해야 하는 유형 — 답을 받았어도 "이행 조건" 을 붙여 보여준다.
@@ -368,7 +437,21 @@ def after_tax(rate: float, tax: dict, exempt: bool = False) -> tuple[float, floa
 
 def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     """상품 한 행을 사용자 상태로 채점한다."""
-    items = extracted.get("items", []) if extracted else []
+    raw_items = extracted.get("items", []) if extracted else []
+    # 조건이 아닌 문구를 먼저 갈라낸다 (`no_condition()` · `decisions/0019`).
+    #   "제외"      금리도 조건도 없다 — 항목 자체가 아니다. 버린다
+    #   "조건불명"   금액은 공시가 알려줬다 — 금리는 남기되 **판정 불가로 못 박는다**
+    # 판정 불가로 두면 질문도 안 만들어지고(`question_for` 의 UNDECIDABLE 경로)
+    # 항상 충족도 되지 않는다. 사용자에게는 범위와 사유로 나간다.
+    items, n_unclear = [], 0
+    for it in raw_items:
+        verdict = no_condition(it)
+        if verdict == "제외":
+            continue
+        if verdict == "조건불명":
+            it = {**it, "condition_type": UNCLEAR_TYPE}
+            n_unclear += 1
+        items.append(it)
     cap = extracted.get("cap") if extracted else None
     rng = bonus_range(items, cap, state)
     thr_unknown = [it for it in rng["unknown"]
@@ -629,7 +712,7 @@ def main() -> None:
 
     # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
     codes = Counter(c for s in scored for c in s.get("caveats", []))
-    hard = [c for c in ("추첨", "단계불명", "모름") if codes[c]]
+    hard = [c for c in ("조건불명", "추첨", "단계불명", "모름") if codes[c]]
     if hard:
         print()
         print("되물어도 못 채우는 사유 — 이 문장을 사용자에게 보여준다")
