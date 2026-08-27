@@ -418,6 +418,10 @@ CAVEAT = {
     "조건불명":  "우대금리 금액은 공시에 있는데 무슨 조건을 채워야 받는지는 나와 있지 "
                  "않습니다. 표시된 최대 금리를 실제로 받을 수 있는지 은행에 전화해 "
                  "확인해 보세요",
+    # 넷째 — 되물어도 못 없앤다 (`decisions/0022`). 공시가 "중복 적용 불가" 를 분명히
+    # 안 밝혀서 우리가 두 해석을 다 열어 둔 것이다. 사용자 상태와 무관하다.
+    "중복우대불명": "여러 우대조건이 함께 적용되는지 하나만 적용되는지 공시가 분명하지 "
+                   "않습니다. 함께 적용되지 않으면 실제 금리는 표시된 최대보다 낮습니다",
 }
 
 # 가입 후에 계속 해야 하는 유형 — 답을 받았어도 "이행 조건" 을 붙여 보여준다.
@@ -467,26 +471,57 @@ def condition_met(item: dict, state: dict) -> bool | None:
     return (not value) if item.get("polarity") == "must_not_have" else bool(value)
 
 
+# ── 배타 그룹을 범위로 처리한다 (`decisions/0022` · `prereg-06` §2.3(1))
+#
+# **왜** — `exclusive_group` 라벨을 절반쯤 못 믿는다. 그룹이 붙은 행에서 공시 폭에
+# 맞는 쪽을 세어 보니 **최댓값 35 : 합산 32 : 둘 다 틀림 26**(은행권)이었다.
+# `iM함께예금`은 `g1` 에 `[0.1 x 5]` 가 들어 있는데 공시 폭이 0.45라 **다섯 개가 다
+# 더해져야** 맞는다 — 중복 적용 불가가 아니라 별개 조건 다섯을 한 그룹으로 묶은 것이다.
+#
+# 공식이 틀린 게 아니라 **라벨을 못 믿는다.** 그러면 배타인지 아닌지도 **모르는 것**이고,
+# 이 프로젝트는 모르는 것을 범위로 낸다(`0015`·`0016`·`0017`).
+#
+#     최댓값(보수) = 중복 적용 불가가 맞다면
+#     합산(낙관)   = 중복 적용 가능하다면. 공시 최고금리 상한에 걸린다
+#
+# 그룹이 없으면 두 값이 같아지므로, 이 처리는 **그룹이 붙은 행에서만 범위를 넓힌다.**
+
+
+def group_totals(chosen: list[dict]) -> tuple[float, float]:
+    """(보수 합계, 낙관 합계). 배타 그룹을 믿을 때와 안 믿을 때다."""
+    plain, groups = 0.0, {}
+    for it in chosen:
+        rate = sane_rate(it)
+        gid = it.get("exclusive_group")
+        if gid:
+            groups.setdefault(gid, []).append(rate)
+        else:
+            plain += rate
+    lo = plain + sum(max(v) for v in groups.values())
+    hi = plain + sum(sum(v) for v in groups.values())
+    return round(lo, 4), round(hi, 4)
+
+
+def has_group(items: list[dict]) -> bool:
+    """배타 그룹이 붙은 항목이 있는가 — 있으면 `중복우대불명` 사유가 붙는다."""
+    return any(it.get("exclusive_group") for it in items)
+
+
 def bonus_range(items: list[dict], cap: float | None, state: dict) -> dict:
-    """충족분 합계의 최소~최대. exclusive_group 은 합이 아니라 그룹 최댓값이다."""
+    """충족분 합계의 최소~최대.
+
+    최소는 **확실히 충족되는 것만, 배타 그룹은 최댓값만**(가장 보수적),
+    최대는 **모르는 것까지 다 충족 + 배타 그룹도 다 더함**(가장 낙관적)이다.
+    낙관 쪽은 공시 최고금리 상한에 걸리므로 광고 금리를 넘을 수 없다.
+    """
     live = [it for it in items if it.get("applies_to_term")]
     met, unmet, unknown = [], [], []
     for it in live:
         verdict = condition_met(it, state)
         (met if verdict is True else unmet if verdict is False else unknown).append(it)
 
-    def total(chosen: list[dict]) -> float:
-        plain, groups = 0.0, {}
-        for it in chosen:
-            rate = sane_rate(it)
-            gid = it.get("exclusive_group")
-            if gid:
-                groups[gid] = max(groups.get(gid, 0.0), rate)
-            else:
-                plain += rate
-        return round(plain + sum(groups.values()), 4)
-
-    lo, hi = total(met), total(met + unknown)
+    lo, _ = group_totals(met)                 # 보수 — 배타를 믿는다
+    _, hi = group_totals(met + unknown)       # 낙관 — 배타를 안 믿는다
     if cap is not None and live:
         lo, hi = min(lo, cap), min(hi, cap)
     return {"lo": lo, "hi": hi, "met": met, "unmet": unmet, "unknown": unknown}
@@ -543,10 +578,20 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
 
     # 공시 최고금리를 조건으로 설명할 수 있는가 (닫힘률과 같은 판정)
     live_all = [i for i in items if i.get("applies_to_term")]
-    declared_all = sum(sane_rate(i) for i in live_all)
+    # 배타 그룹을 믿을 때(보수)와 안 믿을 때(낙관)를 둘 다 낸다 (`decisions/0022`).
+    # 라벨을 절반쯤 못 믿으므로 **어느 한쪽을 고르지 않고 밴드로 판정한다** —
+    # 공시 폭이 [보수, 낙관] 안에 들어오면 설명된 것으로 본다.
+    dec_lo, dec_hi = group_totals(live_all)
     if cap is not None and live_all:
-        declared_all = min(declared_all, cap)
-    unexplained = round(row["gap"] - declared_all, 3)
+        dec_lo, dec_hi = min(dec_lo, cap), min(dec_hi, cap)
+    band = dec_hi - dec_lo > 1e-9          # 배타 그룹이 실제로 폭을 만들었나
+    # 보고용 미설명 폭 — 밴드 밖으로 벗어난 만큼만 센다. 안에 들어오면 0 이다
+    if row["gap"] > dec_hi + TOLERANCE:
+        unexplained = round(row["gap"] - dec_hi, 3)      # 모자람
+    elif row["gap"] < dec_lo - TOLERANCE:
+        unexplained = round(row["gap"] - dec_lo, 3)      # 넘침
+    else:
+        unexplained = 0.0
 
     # 공시 최고금리 상한. 사용자가 공시보다 많이 받을 수는 없다
     raw_lo, raw_hi = gross_lo, gross_hi
@@ -569,11 +614,16 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         tier = "설명부족"
     else:
         tier = "범위" if rng["unknown"] else "확정"
+    # 배타 그룹이 폭을 만들었으면 사용자에게 이유를 말한다 (`decisions/0022`).
+    # 층 라벨만 후해지고 사용자가 모르면 그게 과대 진술이다 — `조건불명`(`0019`)과 같다.
+    if band and tier in MAIN_TIERS:
+        caveat_codes = caveat_codes + ["중복우대불명"]
 
     return {
         "tier": tier,
         "message": TIER_MESSAGE.get(tier, ""),
         "raw_hi": raw_hi, "clamped": raw_hi > row["max"] + 0.001,
+        "declared_lo": dec_lo, "declared_hi": dec_hi, "band": band,
         "name": row["name"], "kind": row["kind"], "code": row["code"], "term": row["term"],
         "base": base, "disclosed_max": row["max"],
         "gross_lo": gross_lo, "gross_hi": gross_hi,
@@ -779,7 +829,7 @@ def main() -> None:
 
     # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
     codes = Counter(c for s in scored for c in s.get("caveats", []))
-    hard = [c for c in ("조건불명", "추첨", "단계불명", "모름") if codes[c]]
+    hard = [c for c in ("조건불명", "중복우대불명", "추첨", "단계불명", "모름") if codes[c]]
     if hard:
         print()
         print("되물어도 못 채우는 사유 — 이 문장을 사용자에게 보여준다")
