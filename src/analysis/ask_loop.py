@@ -120,21 +120,28 @@ def show_list(items: list[dict], top: int | None, prev: list[str] | None = None)
 
 def status_lines(plan: dict, state: dict, scored: list[dict],
                  total: int) -> tuple[list[str], dict]:
-    """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4).
+    """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4) · 분모는 줄어든다 (`0028`).
 
     진행만 보여주면 "모르겠다" 가 "아니오" 와 똑같이 진전으로 보인다. 둘 다 질문을
     지우는데 "모르겠다" 는 금리를 하나도 좁히지 못한다. 확정 상품 수가 그 차이를 가른다.
+
+    **"답한 질문" 은 실제로 답한 수다.** 옛 화면은 `전체 - 남은` 을 답한 수로 표시해
+    11개 답한 사람에게 "22개" 라고 말했다 — 거짓이었다(`calculate.questions_answered`).
+    줄어드는 것은 **전체(분모)** 다.
     """
     left = C.questions_left(plan, state)
+    answered = C.questions_answered(plan, state)
+    now_total = answered + left
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     fixed = sum(1 for s in main if s["tier"] == "확정")
-    done = total - left
     bar_w = 32
-    filled = 0 if not total else round(done / total * bar_w)
+    filled = 0 if not now_total else round(answered / now_total * bar_w)
+    shrunk = f"  (전체 {total}→{now_total}개)" if now_total < total else ""
     lines = [f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
-             f"답한 질문 {done}/{total} · 남은 질문 {left}개",
-             f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개"]
-    return lines, {"left": left, "done": done, "fixed": fixed, "main": len(main),
+             f"답한 질문 {answered}/{now_total}개 · 남은 질문 {left}개{shrunk}"]
+    lines.append(f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개")
+    return lines, {"left": left, "answered": answered, "total_now": now_total,
+                   "done": answered, "fixed": fixed, "main": len(main),
                    "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
 
 
@@ -288,6 +295,8 @@ def run(stamp: str, group: str, term: int, top: int,
     print(f"\n=== 되묻기 질문 루프 · {group} {term}개월 · 스냅샷 {stamp} ===")
     print(f"상품 {len(rows)}개 · 전부 답하면 질문 {total}개입니다. "
           f"언제든 '그만' 을 입력하면 멈춥니다.")
+    print("'아니오'·'모르겠다' 로 답하면 그 조건에 딸린 문구 질문까지 같이 사라져 "
+          "전체 질문 수가 줄어듭니다.")
     print("\n■ 1단계 — 아무것도 묻지 않은 첫 화면 (조건을 다 채웠을 때 순)")
     scored = AB.score_all(rows, by_pair, state, tax)
     show_list(ranked(scored), top)

@@ -459,6 +459,24 @@ def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
     return plan
 
 
+def questions_answered(plan: dict[str, set[str]], state: dict) -> int:
+    """**실제로 답한 질문 수.** 화면의 "답한 질문 N" 은 이 값이어야 한다.
+
+    옛 화면은 `전체 - 남은` 을 "답한 질문" 이라고 표시했는데, **거짓이었다** —
+    `"아니오"`·`"모르겠다"` 는 딸린 문구 질문까지 같이 지우므로 그 차이가 답한 수보다
+    커진다. 실측 세션에서 11개를 답한 사람에게 **"답한 질문 22개"** 라고 표시했다.
+    사람이 지적한 것이다 — *"13 다음 14지. 전체 질문수를 39에서 30으로 줄이라는 뜻이었다."*
+
+    그래서 화면은 이렇게 쓴다.
+        답한 질문   이 함수 (한 번에 하나씩만 늘어난다)
+        전체        답한 + 남은 (지워진 만큼 줄어든다)
+        남은        `questions_left()`
+    """
+    types = sum(1 for kind in plan if kind in state)
+    clauses = sum(1 for subs in plan.values() for c in subs if c in state)
+    return types + clauses
+
+
 def questions_left(plan: dict[str, set[str]], state: dict) -> int:
     """화면에 띄울 남은 질문 수. 이 값은 답할 때마다 절대 늘어나지 않는다."""
     n = 0
