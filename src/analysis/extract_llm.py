@@ -238,6 +238,10 @@ def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
                 pairs.append({"pair_id": len(pairs), "text": text, "term": term})
             rows.append({"pair_id": seen[key], "kind": label, "code": opt["fin_prdt_cd"],
                          "name": " ".join(product["fin_prdt_nm"].split()), "term": term,
+                         # 기관명 — 후보 집합(스코프)의 축이다 (`decisions/0028`).
+                         # 원천에 `kor_co_nm` 으로 있는데 여기 안 담고 있었고, 그래서
+                         # 질문이 카탈로그 17개 기관 전체에서 생성됐다.
+                         "company": (product.get("kor_co_nm") or "").strip(),
                          "base": r1, "max": r2, "gap": round(r2 - r1, 3)})
     return rows, pairs
 

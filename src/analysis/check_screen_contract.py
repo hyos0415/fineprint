@@ -17,6 +17,7 @@
     A4  질문에 답할 때마다 "남은 질문 수" 가 늘어나지 않는다
     A5  net_hi 가 공시 최고금리(세후)를 넘지 않는다
     A6  화면의 "답한 질문 N" 이 실제로 답한 횟수와 같다 (`0028` — 나중에 추가했다)
+    A7  스코프가 걸린 화면에는 **스코프 밖 최고 금리**가 있어야 한다 (`0028` S4)
 
     검사 대상 화면은 `ask_loop.render_final_screen()` 이다 — **사용자가 12번째 질문에서
     그만두면 보는 것이 정확히 그 화면**이므로, 모든 중간 상태에 대해 같은 함수를 읽는다.
@@ -90,15 +91,23 @@ def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> t
 
 
 def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
-         persona: str | None = None, seed: int | None = None) -> list[dict]:
+         persona: str | None = None, seed: int | None = None,
+         rows_all: list[dict] | None = None) -> list[dict]:
     """세션 하나를 끝까지 걸으며 각 중간 상태를 검사한다. 위반 목록을 낸다."""
     rng = random.Random(seed) if seed is not None else None
     state: dict = {}
     bad: list[dict] = []
     prev_left = None
+    scoped = rows_all is not None and len(rows_all) > len(rows)
     for step in range(len(plan) * 3 + 5):        # 무한 루프 방어
         scored = AB.score_all(rows, by_pair, state, tax)
-        screen, st = L.render_final_screen(scored, plan, state, total, None)
+        outside = (L.outside_best(rows_all, rows, by_pair, state, tax)
+                   if scoped else None)
+        screen, st = L.render_final_screen(scored, plan, state, total, None, outside)
+        if outside and f"{outside['net_hi']:.2f}%" not in screen:      # A7
+            bad.append({"assert": "A7", "product": outside["name"], "session": "-",
+                        "step": step,
+                        "detail": f"스코프 밖 최고 {outside['net_hi']:.2f}% 가 화면에 없다"})
         tag = persona or f"seed{seed}"
         for v in check_state(screen, scored, tax):
             bad.append({**v, "session": tag, "step": step})
@@ -121,27 +130,34 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
     return bad
 
 
-def run(stamp: str, group: str, term: int, seeds: int) -> dict:
+def run(stamp: str, group: str, term: int, seeds: int,
+        company: str | None = None, kinds: str | None = None) -> dict:
     tax = C.load_tax()
-    rows, by_pair = AB.load(stamp, group, term)
-    if not rows:
+    rows_all, by_pair = AB.load(stamp, group, term)
+    if not rows_all:
         raise SystemExit(f"{term}개월 상품이 없다")
+    rows = C.scope_rows(rows_all, company, kinds)
+    if not rows:
+        raise SystemExit(f"스코프에 맞는 상품이 없다 (기관={company} 상품군={kinds})")
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
     print(f"\n=== 화면 계약 전수 검사 · {group} {term}개월 · 스냅샷 {stamp} ===")
     print(f"상품 {len(rows)}개 · 전부 답하면 질문 {total}개 · "
           f"세션 {3 + seeds}개 (페르소나 3 + 시드 0~{seeds - 1})")
+    if len(rows) < len(rows_all):
+        print(f"스코프 기관={company} 상품군={kinds} — 카탈로그 {len(rows_all)}개 중 "
+              f"{len(rows)}개. A7 도 검사한다")
     print("검사 대상 화면은 ask_loop.render_final_screen() — 중단하면 보는 그 화면이다\n")
 
     t0 = time.monotonic()
     bad, n_states = [], 0
     for persona in ("예", "아니오", "모름"):
-        out = walk(rows, by_pair, plan, total, tax, persona=persona)
+        out = walk(rows, by_pair, plan, total, tax, persona=persona, rows_all=rows_all)
         n_states += max(s["step"] for s in out) + 1 if out else total + 1
         bad += out
         print(f"  페르소나 {persona:<4} 위반 {len(out)}건")
     for seed in range(seeds):
-        bad += walk(rows, by_pair, plan, total, tax, seed=seed)
+        bad += walk(rows, by_pair, plan, total, tax, seed=seed, rows_all=rows_all)
         if (seed + 1) % 50 == 0:
             print(f"  시드 {seed + 1:>3}/{seeds} 까지 · 누적 위반 {len(bad)}건 "
                   f"· {time.monotonic() - t0:.0f}초")
@@ -155,7 +171,8 @@ def run(stamp: str, group: str, term: int, seeds: int) -> dict:
                        ("A3", "사유 문장을 숨기지 않는다"),
                        ("A4", "남은 질문 수가 늘지 않는다"),
                        ("A5", "공시 최고금리 상한"),
-                       ("A6", "'답한 질문' 이 실제 답한 수와 같다")):
+                       ("A6", "'답한 질문' 이 실제 답한 수와 같다"),
+                       ("A7", "스코프 밖 최고 금리를 보여준다")):
         hits = codes.get(name, [])
         mark = "통과" if not hits else f"**불통과 {len(hits)}건**"
         print(f"  {name}  {text:<34}{mark}")
@@ -179,7 +196,8 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
     group, term, seeds = "bank", 12, SEEDS
-    for flag in ("--group", "--term", "--seeds"):
+    company, kinds = None, None
+    for flag in ("--group", "--term", "--seeds", "--company", "--kind"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -188,11 +206,13 @@ def main() -> None:
             group = v if flag == "--group" else group
             term = int(v) if flag == "--term" else term
             seeds = int(v) if flag == "--seeds" else seeds
+            company = v if flag == "--company" else company
+            kinds = v if flag == "--kind" else kinds
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/check_screen_contract.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--seeds 200]")
-    report = run(argv[0], group, term, seeds)
+    report = run(argv[0], group, term, seeds, company, kinds)
     out = C.OUT_DIR / f"screen_contract_{group}_{argv[0]}_{term}m.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"→ {out.relative_to(C.REPO_ROOT)} (git 제외)")

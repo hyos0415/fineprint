@@ -23,6 +23,7 @@
     python src/analysis/ask_loop.py 20260826 --group bank --term 12
     python src/analysis/ask_loop.py 20260826 --auto 예            # 사람 없이 전부 "예"
     python src/analysis/ask_loop.py 20260826 --answers 예,아니오,모름
+    python src/analysis/ask_loop.py 20260826 --company 우리 --kind 적금   # 후보 집합
 """
 from __future__ import annotations
 
@@ -166,8 +167,35 @@ ASKABLE_CAVEATS = ("미응답",)      # `수치필요` 는 `prereg-10` 에서 �
 HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요")
 
 
+def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
+                 state: dict, tax: dict) -> dict | None:
+    """**스코프 밖 최고 금리** — 화면 계약 A7 (`decisions/0028` S4 · `prereg-11` §2).
+
+    좁히면 금리를 잃는다. 은행권 실측으로 기관별 격차 **중앙값 2.41%p**, 16곳 중
+    15곳이 1.0%p 초과다. 안 보여주면 `0017` 이 막은 실패("좋은 상품이 묻힌다")를
+    스코프에서 되살린다. 그래서 밖에 무엇이 있는지를 항상 같이 말한다.
+
+    비교는 **조건을 다 채웠을 때(hi)** 로 한다 — 밖의 상품은 질문을 안 했으므로
+    답을 받은 상태가 없다. 화면에도 "조건 다 채웠을 때" 라고 적어야 한다.
+    """
+    codes = {r["code"] for r in rows_in}
+    outs = [r for r in rows_all if r["code"] not in codes]
+    if not outs:
+        return None
+    best_out = max(AB.score_all(outs, by_pair, state, tax),
+                   key=lambda s: s["net_hi"], default=None)
+    inside = AB.score_all(rows_in, by_pair, state, tax) if rows_in else []
+    best_in = max((s["net_hi"] for s in inside), default=0.0)
+    if best_out is None or best_out["net_hi"] <= best_in + 1e-9:
+        return None                      # 숨길 것이 없다 — 밖이 더 좋지 않다
+    return {"name": best_out["name"], "net_hi": best_out["net_hi"],
+            "gap": round(best_out["net_hi"] - best_in, 3),
+            "company": best_out.get("company") or ""}
+
+
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
-                        top: int | None) -> tuple[str, dict]:
+                        top: int | None, outside: dict | None = None,
+                        total_all: int | None = None) -> tuple[str, dict]:
     """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
 
     루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
@@ -183,6 +211,11 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
                  {s["tier"] for s in rest}}
         lines.append(f"\n  메인 밖 {len(rest)}개 — "
                      + " · ".join(f"{t} {n}" for t, n in sorted(tally.items())))
+    if outside:                                    # A7 — 좁히는 대가를 숨기지 않는다
+        wider = "" if total_all is None else f" · 넓히면 질문이 {total_all}개로 늘어납니다"
+        lines.append(f"\n  ⚠ 스코프 밖에 {outside['net_hi']:.2f}% 가 있습니다 "
+                     f"({outside['company']} {outside['name'][:22]} · "
+                     f"+{outside['gap']:.2f}%p · 조건 다 채웠을 때){wider}")
     shown = {c for s in main for c in s.get("caveats", [])}
     for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
                           ("되물어도 못 채우는 사유", HARD_CAVEATS)):
@@ -282,17 +315,29 @@ def apply_answer(state: dict, key: str, slot: dict, raw: str, kind: str) -> str:
 
 
 def run(stamp: str, group: str, term: int, top: int,
-        scripted: list[str] | None, auto: str | None) -> dict:
+        scripted: list[str] | None, auto: str | None,
+        company: str | None = None, kinds: str | None = None) -> dict:
     tax = C.load_tax()
-    rows, by_pair = AB.load(stamp, group, term)
-    if not rows:
+    rows_all, by_pair = AB.load(stamp, group, term)
+    if not rows_all:
         raise SystemExit(f"{term}개월 상품이 없다. --term 을 바꿔본다")
+    # 0단계 — 후보 집합을 자른다 (`decisions/0028`). 질문은 이 집합에서만 나온다
+    rows = C.scope_rows(rows_all, company, kinds)
+    if not rows:
+        cos = sorted({r["company"] for r in rows_all if r["company"]})
+        raise SystemExit(f"스코프에 맞는 상품이 없다 (기관={company} 상품군={kinds})\n"
+                         f"가능한 기관: {', '.join(cos)}")
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
+    total_all = C.questions_left(C.question_plan(rows_all, by_pair), {})
     state: dict = {}
     steps: list[dict] = []
+    scoped = len(rows) < len(rows_all)
 
     print(f"\n=== 되묻기 질문 루프 · {group} {term}개월 · 스냅샷 {stamp} ===")
+    if scoped:
+        print(f"스코프     기관 {company or '전체'} · 상품군 {kinds or '전체'} "
+              f"— 카탈로그 {len(rows_all)}개 중 {len(rows)}개 (질문 {total_all}→{total}개)")
     print(f"상품 {len(rows)}개 · 전부 답하면 질문 {total}개입니다. "
           f"언제든 '그만' 을 입력하면 멈춥니다.")
     print("'아니오'·'모르겠다' 로 답하면 그 조건에 딸린 문구 질문까지 같이 사라져 "
@@ -301,6 +346,11 @@ def run(stamp: str, group: str, term: int, top: int,
     scored = AB.score_all(rows, by_pair, state, tax)
     show_list(ranked(scored), top)
     st = status_bar(plan, state, scored, total)
+    out0 = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
+    if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
+        print(f"\n  ⚠ 스코프 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
+              f"({out0['company']} {out0['name'][:22]} · +{out0['gap']:.2f}%p · "
+              f"조건 다 채웠을 때) · 넓히면 질문이 {total_all}개로 늘어납니다")
     start_top1 = st["top1"]
     print("\n" + "-" * 92)
     print("■ 2단계 — 질문 루프. 커버리지가 큰 질문부터 묻습니다 (decisions/0018 고정 순서)")
@@ -346,7 +396,9 @@ def run(stamp: str, group: str, term: int, top: int,
     print("\n" + "-" * 92)
     print("■ 3단계 — 결과")
     scored = AB.score_all(rows, by_pair, state, tax)
-    screen, st = render_final_screen(scored, plan, state, total, top)
+    outside = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
+    screen, st = render_final_screen(scored, plan, state, total, top,
+                                     outside, total_all if scoped else None)
     print(screen)
 
     # ── 반증 조건 확인 (`decisions/0024`)
@@ -386,7 +438,9 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
     group, term, top, auto, answers = "bank", 12, 10, None, None
-    for flag in ("--group", "--term", "--top", "--auto", "--answers"):
+    company, kinds = None, None
+    for flag in ("--group", "--term", "--top", "--auto", "--answers",
+                 "--company", "--kind"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -397,16 +451,19 @@ def main() -> None:
             top = int(v) if flag == "--top" else top
             auto = v if flag == "--auto" else auto
             answers = v if flag == "--answers" else answers
+            company = v if flag == "--company" else company
+            kinds = v if flag == "--kind" else kinds
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/ask_loop.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--top 10] "
+                         "[--company 우리,농협] [--kind 적금] "
                          "[--auto 예|아니오|모름] [--answers 예,아니오,모름]")
     if auto and auto not in ("예", "아니오", "모름"):
         raise SystemExit("--auto 는 예 · 아니오 · 모름 중 하나다")
     scripted = [a.strip() for a in answers.split(",")] if answers else None
     stamp = argv[0]
-    log = run(stamp, group, term, top, scripted, auto)
+    log = run(stamp, group, term, top, scripted, auto, company, kinds)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = C.OUT_DIR / f"ask_session_{group}_{stamp}_{term}m_{ts}.json"
     out.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")

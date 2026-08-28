@@ -436,6 +436,33 @@ ASK_BUDGET = 12          # 평가에 반영하는 질문 개수. 수확 체감�
 # 필요 없다. 실측으로 전부 답했을 때의 실제 질문 수(22 · 27)와 정확히 일치한다.
 
 
+# ── 후보 집합(스코프) — 질문은 후보에서만 만든다 (`decisions/0028` · `prereg-11`)
+#
+# **왜** — 질문이 카탈로그 전체(은행권 17개 기관)에서 생성됐다. 우리·농협을 보려는
+# 사용자가 제주·광주·경남 상품 때문에 답하고 있었고(실측 세션에서 답한 문구 질문 8개
+# 중 6개), 그 자리에서 중단했다. 스코프만 걸면 **39개 → 7개**다.
+#
+# **`0026`이 금지한 "질문 줄이기" 와 다르다.** 후보에 남은 상품의 조건을 안 묻는 것은
+# 근거 없는 최고 금리를 화면에 남기는 것(과대 광고)이고, 스코프는 그 상품이 **화면에서
+# 사라지는** 것이라 금리를 주장하지 않는다.
+#
+# **지표는 이 함수를 쓰지 않는다** (`prereg-11` §4). 기준선·게이트·예산 12개는 카탈로그
+# 전체에서만 잰다 — 스코프로 확정률을 올리는 도피를 막는다.
+
+
+def scope_rows(rows: list[dict], company: str | None = None,
+               kinds: str | None = None) -> list[dict]:
+    """후보 집합을 자른다. 기관은 부분 일치다 — `"우리"` 로 `우리은행` 이 걸린다."""
+    out = rows
+    if company:
+        wants = [w.strip() for w in company.split(",") if w.strip()]
+        out = [r for r in out if any(w in (r.get("company") or "") for w in wants)]
+    if kinds:
+        ks = [k.strip() for k in kinds.split(",") if k.strip()]
+        out = [r for r in out if r["kind"] in ks]
+    return out
+
+
 def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
     """`{조건 유형: {수치 후속 질문 키}}`. "모두 예" 를 가정한 최대 질문 집합이다."""
     plan: dict[str, set[str]] = {}
@@ -774,6 +801,7 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "raw_hi": raw_hi, "clamped": raw_hi > row["max"] + 0.001,
         "declared_lo": dec_lo, "declared_hi": dec_hi, "band": band,
         "name": row["name"], "kind": row["kind"], "code": row["code"], "term": row["term"],
+        "company": row.get("company", ""),          # 스코프 축 (`decisions/0028`)
         "base": base, "disclosed_max": row["max"],
         "gross_lo": gross_lo, "gross_hi": gross_hi,
         "net_lo": net_lo, "net_hi": net_hi, "tax_rate": rate_used,
@@ -797,7 +825,9 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
     group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
-    for flag in ("--group", "--term", "--top", "--state", "--sort"):
+    company, kinds = None, None
+    for flag in ("--group", "--term", "--top", "--state", "--sort",
+                 "--company", "--kind"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -808,11 +838,13 @@ def main() -> None:
             top = int(v) if flag == "--top" else top
             state_arg = v if flag == "--state" else state_arg
             order = v if flag == "--sort" else order
+            company = v if flag == "--company" else company
+            kinds = v if flag == "--kind" else kinds
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
-                         "[--sort hi|lo] [--top 10]")
+                         "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]")
     if order not in ("hi", "lo"):
         raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
     stamp = argv[0]
@@ -853,6 +885,14 @@ def main() -> None:
     tax = load_tax()
 
     rows, pairs = load_pairs(stamp, group)
+    if company or kinds:                     # 0단계 후보 집합 (`decisions/0028`)
+        n_all = len([r for r in rows if r["term"] == term])
+        rows = scope_rows(rows, company, kinds)
+        n_in = len([r for r in rows if r["term"] == term])
+        if not n_in:
+            raise SystemExit(f"스코프에 맞는 상품이 없다 (기관={company} 상품군={kinds})")
+        print(f"스코프       기관 {company or '전체'} · 상품군 {kinds or '전체'} "
+              f"— {term}개월 카탈로그 {n_all}개 중 {n_in}개")
     llm_path = OUT_DIR / f"extract_llm{suffix}_{stamp}.json"
     if not llm_path.exists():
         raise SystemExit(f"추출 결과가 없다: {llm_path.relative_to(REPO_ROOT)}\n"
