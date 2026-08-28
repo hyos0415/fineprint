@@ -206,6 +206,8 @@ def question_for(item: dict, state: dict) -> dict | None:
         if q is None:
             return None                  # 계단식 — 수치를 받아도 금리를 모른다
         key, unit, need, direction = q
+        if state.get(key) == UNSURE:
+            return None                  # 수치를 물었고 "모르겠다" 였다 — 다시 물어도 같다
         return {"key": key, "kind": kind, "unit": unit, "need": need,
                 "direction": direction, "evidence": item.get("evidence") or ""}
     if answered is None:
@@ -226,7 +228,13 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
         elif state.get(kind) == UNSURE:
             out.append("모름")
         elif state.get(kind) and has_threshold(it):
-            out.append("수치필요" if threshold_question(it) else "단계불명")
+            q = threshold_question(it)
+            if q is None:
+                out.append("단계불명")
+            elif state.get(q[0]) == UNSURE:
+                out.append("모름")       # 수치를 물었고 "모르겠다" 였다 — 되물어도 안 없어진다
+            else:
+                out.append("수치필요")
         else:
             out.append("미응답")
     if any(it.get("condition_type") in ONGOING for it in items_met):
