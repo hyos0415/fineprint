@@ -706,7 +706,14 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     elif unexplained > TOLERANCE:
         tier = "설명부족"
     else:
-        tier = "범위" if rng["unknown"] else "확정"
+        # **폭이 남아 있으면 `확정` 이 아니다** (`prereg-09` §7.1 · 화면 계약 검사 A2).
+        # `unknown` 이 0 이어도 배타 그룹 밴드(`0022`)가 폭을 만들 수 있다 — 조건을 전부
+        # 답한 `아이행복적금` 이 4.02~5.71%(폭 1.69%p) 인데 `확정` 이었다. 그러면 상태바
+        # 둘째 숫자("금리가 정해진 상품")가 **안 정해진 상품을 센다.**
+        # `0022` 를 층 라벨에 적용하는 것이고, 새 규칙이 아니다.
+        # 폭은 **상한을 적용한 뒤** 값으로 본다 — 사용자가 보는 숫자가 그것이다.
+        # 상한이 폭을 닫아버린 경우(둘 다 공시 최고금리에 걸림)는 실제로 확정이다.
+        tier = "범위" if (rng["unknown"] or gross_hi - gross_lo > 1e-9) else "확정"
     # 배타 그룹이 폭을 만들었으면 사용자에게 이유를 말한다 (`decisions/0022`).
     # 층 라벨만 후해지고 사용자가 모르면 그게 과대 진술이다 — `조건불명`(`0019`)과 같다.
     if band and tier in MAIN_TIERS:

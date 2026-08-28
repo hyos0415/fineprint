@@ -86,27 +86,36 @@ def ranked(scored: list[dict]) -> list[dict]:
     return sorted(main, key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
 
 
-def show_list(items: list[dict], top: int, prev: list[str] | None = None) -> None:
-    """상품 목록. **금리 옆에 남은 조건 수와 사유를 같이 놓는다** (화면 계약 1·4번)."""
-    for i, s in enumerate(items[:top], 1):
-        move = ""
-        if prev is not None:
-            was = prev.index(s["code"]) + 1 if s["code"] in prev else None
-            if was is None:
-                move = " NEW"
-            elif was != i:
-                move = f" {was}->{i}"
-        if s["net_hi"] > s["net_lo"]:
-            left = f"남은 {s['n_unknown']}개"
-        elif s["n_unknown"]:
-            left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
-        else:
-            left = "확정"
-        note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
-        print(f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}  {left:<22}{move}{note}")
+def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
+    """상품 한 줄. **금리 옆에 남은 조건 수와 사유를 같이 놓는다** (화면 계약 1·4번).
+
+    화면 계약 검사(`check_screen_contract.py`)가 **이 함수의 출력을 그대로** 읽는다.
+    렌더가 한 곳에만 있어야 "화면에서 과대 진술이 된다" 를 코드로 막을 수 있다.
+    """
+    move = ""
+    if prev is not None:
+        was = prev.index(s["code"]) + 1 if s["code"] in prev else None
+        if was is None:
+            move = " NEW"
+        elif was != i:
+            move = f" {was}->{i}"
+    if s["net_hi"] > s["net_lo"]:
+        left = f"남은 {s['n_unknown']}개"
+    elif s["n_unknown"]:
+        left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
+    else:
+        left = "확정"
+    note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
+    return f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}  {left:<22}{move}{note}"
 
 
-def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
+def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:
+    for line in [product_line(i, s, prev) for i, s in enumerate(items[:top], 1)]:
+        print(line)
+
+
+def status_lines(plan: dict, state: dict, scored: list[dict],
+                 total: int) -> tuple[list[str], dict]:
     """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4).
 
     진행만 보여주면 "모르겠다" 가 "아니오" 와 똑같이 진전으로 보인다. 둘 다 질문을
@@ -118,11 +127,60 @@ def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
     done = total - left
     bar_w = 32
     filled = 0 if not total else round(done / total * bar_w)
-    print(f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
-          f"답한 질문 {done}/{total} · 남은 질문 {left}개")
-    print(f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개")
-    return {"left": left, "done": done, "fixed": fixed, "main": len(main),
-            "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
+    lines = [f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
+             f"답한 질문 {done}/{total} · 남은 질문 {left}개",
+             f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개"]
+    return lines, {"left": left, "done": done, "fixed": fixed, "main": len(main),
+                   "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
+
+
+def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
+    lines, st = status_lines(plan, state, scored, total)
+    for line in lines:
+        print(line)
+    return st
+
+
+# 사유 문장을 두 블록으로 나눠 **전부** 보여준다 (`decisions/0016` · `prereg-09` A3)
+#
+# 처음에는 아래 `HARD` 여섯 개만 문장으로 냈고, `미응답`·`수치필요`는 상품 줄의 코드
+# (`주의:미응답`)와 `남은 N개` 로만 나갔다. **화면 계약 검사가 그걸 A3 위반으로 잡았고**
+# 사람이 "문장도 보여준다" 를 골랐다 — `0019` 의 부산은행이 정확히 "코드는 있는데
+# 사용자가 못 읽은" 자리였다.
+#
+# 두 블록으로 가르는 이유는 `CAVEAT` 자체가 두 종류이기 때문이다 — 답하면 없어지는
+# 것과 되물어도 안 없어지는 것을 한 제목 아래 놓으면 사용자가 무엇을 할 수 있는지
+# 알 수 없다.
+ASKABLE_CAVEATS = ("미응답", "수치필요")
+HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요")
+
+
+def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
+                        top: int | None) -> tuple[str, dict]:
+    """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
+
+    루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
+    상태에 대해 읽는다. 사용자가 12번째 질문에서 그만두면 보는 것이 정확히 이 화면이다.
+    """
+    main = ranked(scored)
+    rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
+    lines = [product_line(i, s) for i, s in enumerate(main[:top], 1)]
+    bar, st = status_lines(plan, state, scored, total)
+    lines += bar
+    if rest:
+        tally = {t: sum(1 for x in rest if x["tier"] == t) for t in
+                 {s["tier"] for s in rest}}
+        lines.append(f"\n  메인 밖 {len(rest)}개 — "
+                     + " · ".join(f"{t} {n}" for t, n in sorted(tally.items())))
+    shown = {c for s in main for c in s.get("caveats", [])}
+    for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
+                          ("되물어도 못 채우는 사유", HARD_CAVEATS)):
+        hit = [c for c in codes if c in shown]
+        if hit:
+            lines.append(f"\n  {header} — 이 문장을 사용자에게 보여준다")
+            for c in hit:
+                lines.append(f'    {c:<10}"{C.CAVEAT[c]}"')
+    return "\n".join(lines), st
 
 
 def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
@@ -269,20 +327,8 @@ def run(stamp: str, group: str, term: int, top: int,
     print("\n" + "-" * 92)
     print("■ 3단계 — 결과")
     scored = AB.score_all(rows, by_pair, state, tax)
-    main, rest = ranked(scored), [s for s in scored if s["tier"] not in C.MAIN_TIERS]
-    show_list(main, top)
-    st = status_bar(plan, state, scored, total)
-    if rest:
-        print(f"\n  메인 밖 {len(rest)}개 — "
-              + " · ".join(f"{t} {n}" for t, n in
-                           sorted({s['tier']: sum(1 for x in rest if x['tier'] == s['tier'])
-                                   for s in rest}.items())))
-    hard = sorted({c for s in main for c in s.get("caveats", [])}
-                  & {"조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요"})
-    if hard:
-        print("\n  되물어도 못 채우는 사유 — 이 문장을 사용자에게 보여준다")
-        for c in hard:
-            print(f'    {c:<10}"{C.CAVEAT[c]}"')
+    screen, st = render_final_screen(scored, plan, state, total, top)
+    print(screen)
 
     # ── 반증 조건 확인 (`decisions/0024`)
     n_unsure = sum(1 for s in steps if s["answer_kind"] == "unsure")
