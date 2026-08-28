@@ -52,16 +52,20 @@ QUIT = {"그만", "중단", "q", "quit", "exit"}
 MAXOUT = {"최대", "max"}
 
 MONEY_IN = re.compile(r"^(\d[\d,]*)\s*(억원|억|만원|만|천원|천|원)?$")
+# 횟수 질문에 `"6회"` 처럼 단위를 붙여 답하는 것을 받는다 — 안 받으면 사용자가
+# 화면의 임계 표기(`6회`)를 그대로 옮겨 적었을 때 거절당한다 (2026-08-28 실측)
+COUNT_IN = re.compile(r"^(\d[\d,]*)\s*(회|건|명|개|일|좌|번)?$")
 
 
 def parse_number(raw: str, unit: str) -> float | None:
-    """`"50만원"` · `"6"` · `"300,000"` 을 숫자로. 못 읽으면 None 이다."""
+    """`"50만원"` · `"6"` · `"6회"` · `"300,000"` 을 숫자로. 못 읽으면 None 이다."""
+    if unit != "금액":
+        m = COUNT_IN.match(raw.replace(" ", ""))
+        return None if not m else float(int(m.group(1).replace(",", "")))
     m = MONEY_IN.match(raw.replace(" ", ""))
     if not m:
         return None
     n = float(int(m.group(1).replace(",", "")))
-    if unit != "금액":
-        return n                                    # 횟수는 단위가 없다
     suffix = (m.group(2) or "원").replace("억", "억원").replace("만", "만원")
     suffix = suffix.replace("천", "천원").replace("원원", "원")
     return n * C.MONEY_UNIT.get(suffix, 1)
@@ -86,69 +90,154 @@ def ranked(scored: list[dict]) -> list[dict]:
     return sorted(main, key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
 
 
-def show_list(items: list[dict], top: int, prev: list[str] | None = None) -> None:
-    """상품 목록. **금리 옆에 남은 조건 수와 사유를 같이 놓는다** (화면 계약 1·4번)."""
-    for i, s in enumerate(items[:top], 1):
-        move = ""
-        if prev is not None:
-            was = prev.index(s["code"]) + 1 if s["code"] in prev else None
-            if was is None:
-                move = " NEW"
-            elif was != i:
-                move = f" {was}->{i}"
-        if s["net_hi"] > s["net_lo"]:
-            left = f"남은 {s['n_unknown']}개"
-        elif s["n_unknown"]:
-            left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
-        else:
-            left = "확정"
-        note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
-        print(f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}  {left:<22}{move}{note}")
+def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
+    """상품 한 줄. **금리 옆에 남은 조건 수와 사유를 같이 놓는다** (화면 계약 1·4번).
+
+    화면 계약 검사(`check_screen_contract.py`)가 **이 함수의 출력을 그대로** 읽는다.
+    렌더가 한 곳에만 있어야 "화면에서 과대 진술이 된다" 를 코드로 막을 수 있다.
+    """
+    move = ""
+    if prev is not None:
+        was = prev.index(s["code"]) + 1 if s["code"] in prev else None
+        if was is None:
+            move = " NEW"
+        elif was != i:
+            move = f" {was}->{i}"
+    if s["net_hi"] > s["net_lo"]:
+        left = f"남은 {s['n_unknown']}개"
+    elif s["n_unknown"]:
+        left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
+    else:
+        left = "확정"
+    note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
+    return f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}  {left:<22}{move}{note}"
 
 
-def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
-    """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4).
+def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:
+    for line in [product_line(i, s, prev) for i, s in enumerate(items[:top], 1)]:
+        print(line)
+
+
+def status_lines(plan: dict, state: dict, scored: list[dict],
+                 total: int) -> tuple[list[str], dict]:
+    """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4) · 분모는 줄어든다 (`0028`).
 
     진행만 보여주면 "모르겠다" 가 "아니오" 와 똑같이 진전으로 보인다. 둘 다 질문을
     지우는데 "모르겠다" 는 금리를 하나도 좁히지 못한다. 확정 상품 수가 그 차이를 가른다.
+
+    **"답한 질문" 은 실제로 답한 수다.** 옛 화면은 `전체 - 남은` 을 답한 수로 표시해
+    11개 답한 사람에게 "22개" 라고 말했다 — 거짓이었다(`calculate.questions_answered`).
+    줄어드는 것은 **전체(분모)** 다.
     """
     left = C.questions_left(plan, state)
+    answered = C.questions_answered(plan, state)
+    now_total = answered + left
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     fixed = sum(1 for s in main if s["tier"] == "확정")
-    done = total - left
     bar_w = 32
-    filled = 0 if not total else round(done / total * bar_w)
-    print(f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
-          f"답한 질문 {done}/{total} · 남은 질문 {left}개")
-    print(f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개")
-    return {"left": left, "done": done, "fixed": fixed, "main": len(main),
-            "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
+    filled = 0 if not now_total else round(answered / now_total * bar_w)
+    shrunk = f"  (전체 {total}→{now_total}개)" if now_total < total else ""
+    lines = [f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
+             f"답한 질문 {answered}/{now_total}개 · 남은 질문 {left}개{shrunk}"]
+    lines.append(f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개")
+    return lines, {"left": left, "answered": answered, "total_now": now_total,
+                   "done": answered, "fixed": fixed, "main": len(main),
+                   "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
+
+
+def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
+    lines, st = status_lines(plan, state, scored, total)
+    for line in lines:
+        print(line)
+    return st
+
+
+# 사유 문장을 두 블록으로 나눠 **전부** 보여준다 (`decisions/0016` · `prereg-09` A3)
+#
+# 처음에는 아래 `HARD` 여섯 개만 문장으로 냈고, `미응답`·`수치필요`는 상품 줄의 코드
+# (`주의:미응답`)와 `남은 N개` 로만 나갔다. **화면 계약 검사가 그걸 A3 위반으로 잡았고**
+# 사람이 "문장도 보여준다" 를 골랐다 — `0019` 의 부산은행이 정확히 "코드는 있는데
+# 사용자가 못 읽은" 자리였다.
+#
+# 두 블록으로 가르는 이유는 `CAVEAT` 자체가 두 종류이기 때문이다 — 답하면 없어지는
+# 것과 되물어도 안 없어지는 것을 한 제목 아래 놓으면 사용자가 무엇을 할 수 있는지
+# 알 수 없다.
+ASKABLE_CAVEATS = ("미응답",)      # `수치필요` 는 `prereg-10` 에서 사라졌다
+HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요")
+
+
+def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
+                        top: int | None) -> tuple[str, dict]:
+    """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
+
+    루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
+    상태에 대해 읽는다. 사용자가 12번째 질문에서 그만두면 보는 것이 정확히 이 화면이다.
+    """
+    main = ranked(scored)
+    rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
+    lines = [product_line(i, s) for i, s in enumerate(main[:top], 1)]
+    bar, st = status_lines(plan, state, scored, total)
+    lines += bar
+    if rest:
+        tally = {t: sum(1 for x in rest if x["tier"] == t) for t in
+                 {s["tier"] for s in rest}}
+        lines.append(f"\n  메인 밖 {len(rest)}개 — "
+                     + " · ".join(f"{t} {n}" for t, n in sorted(tally.items())))
+    shown = {c for s in main for c in s.get("caveats", [])}
+    for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
+                          ("되물어도 못 채우는 사유", HARD_CAVEATS)):
+        hit = [c for c in codes if c in shown]
+        if hit:
+            lines.append(f"\n  {header} — 이 문장을 사용자에게 보여준다")
+            for c in hit:
+                lines.append(f'    {c:<10}"{C.CAVEAT[c]}"')
+    return "\n".join(lines), st
 
 
 def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
-    """질문 한 개를 화면 문장으로. **공시 문구를 그대로 붙인다** (`decisions/0016` P1)."""
-    lines = []
-    for ev in sorted(slot["evidence"])[:3]:
-        lines.append(f'      공시 문구  "{ev}"')
-    if slot["needs"]:
-        needs = " · ".join(fmt_need(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
-        more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}개 더"
-        head = (f"{slot['kind']} — 얼마나 하십니까? "
-                f"(상품별 기준 {needs}{more})")
-        hint = "숫자 입력 (예: 50만원 / 6) · [모름] · [아니오]=안 한다 · [그만]"
-    else:
+    """질문 한 개를 화면 문장으로.
+
+    **문구 질문은 공시 문구가 질문 문장 자체다** (`prereg-10`). 임계가 붙은 조건에
+    "금액이 얼마입니까" 를 물으면, 한 유형 아래 대상이 다른 문구가 섞여 있어 답이
+    존재하지 않는다 — 적립식예금 잔액·펀드 보유액·정기예금 가입액은 같은 축이 아니다.
+    문구를 그대로 묻고 예/아니오/모름을 받으면 사용자는 자기 상황을 대조만 하면 된다.
+
+    문구를 **자르지 않는다.** 질문 문장을 자르면 조건이 달라진다.
+    """
+    if "#" in key:                             # 문구 단위 질문
+        ev = sorted(slot["evidence"])[0] if slot["evidence"] else "(문구 없음)"
+        head = f'"{ev}"'
+        lines = [f"      위는 공시 문구 원문입니다 — 충족하십니까? "
+                 f"(조건 유형 {slot['kind']})"]
+    else:                                      # 조건 유형 질문
         head = f"{key} — 이 조건을 충족하십니까?"
-        hint = "[예] [아니오] [모름] · [그만]"
-    return head, lines + [f"      {hint}"]
+        lines = [f'      공시 문구  "{ev[:74]}"' for ev in sorted(slot["evidence"])[:3]]
+    return head, lines + ["      [예] [아니오] [모름] · [그만]"]
+
+
+def bad_answer_hint(slot: dict, kind: str) -> str:
+    """못 읽은 답에 **무엇이 문제인지** 말해준다.
+
+    옛 메시지는 `"[예] [아니오] [모름] 또는 숫자를 입력하세요"` 였는데 수치 질문에서
+    `예` 는 유효한 답이 아니었다 — **메시지가 거짓이었다.** 실측 세션에서 사용자가 `예` 를
+    세 번 넣고 같은 거절을 세 번 받은 뒤 사실과 다른 `아니오` 로 답했다(`prereg-09` §8).
+    `prereg-10` 이 수치 질문 자체를 없앴으므로 이제 답은 셋뿐이다.
+    """
+    if kind == "number":
+        return ("      숫자로는 판정하지 않습니다 — 위 문구를 충족하시는지 "
+                "[예] [아니오] [모름] 으로 답해 주세요")
+    return "      못 읽었습니다. [예] [아니오] [모름] 중에서 입력하세요"
 
 
 def read_answer(scripted: list[str] | None, auto: str | None,
                 slot: dict) -> tuple[str, str]:
-    """(원문, 종류). 종류는 yes·no·unsure·number·quit 다."""
+    """(원문, 종류). 종류는 yes·no·unsure·quit·number·bad 다.
+
+    `number` 는 **오답 안내용**으로만 남긴다 — `prereg-10` 뒤로 수치 질문이 없으므로
+    숫자를 넣은 사용자에게 "문구에 예/아니오로 답해 주세요" 라고 말해야 한다.
+    숫자를 조용히 "예" 로 받으면 사용자가 하지 않은 답을 우리가 만든 것이 된다.
+    """
     if auto:                                   # 사람 없이 도는 모드 — 회귀 확인용
-        if auto == "예" and slot["needs"]:
-            # 가장 높은 임계를 넘겨 답한다 — `ask_budget.py` 의 "다 충족 페르소나" 와 같다
-            return f"{int(max(slot['needs']))}", "number"
         return {"예": ("예", "yes"), "아니오": ("아니오", "no"),
                 "모름": ("모름", "unsure")}[auto]
     if scripted is not None:
@@ -164,45 +253,31 @@ def read_answer(scripted: list[str] | None, auto: str | None,
     low = raw.lower()
     if low in QUIT:
         return raw, "quit"
-    if low in MAXOUT:                          # 수치가 아니면 그냥 "예" 다
-        return ((f"{int(max(slot['needs']))}", "number") if slot["needs"]
-                else (raw, "yes"))
-    if low in YES:
+    if low in MAXOUT or low in YES:            # `최대` 는 옛 대본 호환 — 이제 그냥 예다
         return raw, "yes"
     if low in NO:
         return raw, "no"
     if low in UNSURE_IN:
         return raw, "unsure"
-    if parse_number(raw, slot["unit"]) is not None:
-        return raw, "number"
+    if parse_number(raw, "횟수") is not None or parse_number(raw, "금액") is not None:
+        return raw, "number"                   # 숫자다 — 위 안내 문장으로 되묻는다
     return raw, "bad"
 
 
 def apply_answer(state: dict, key: str, slot: dict, raw: str, kind: str) -> str:
     """답을 상태에 넣는다. 넣은 답의 종류를 돌려준다.
 
-    수치 질문에 "아니오" 는 **그 조건 자체를 안 한다**는 뜻이므로 유형 쪽을 `False` 로
-    되돌린다. 수치를 0 으로 넣으면 `"1천만원 이하"` 같은 최대 방향 임계를 오히려
-    충족시켜 버린다 — 반대 방향으로 거짓이 된다.
+    `prereg-10` 뒤로 유형 질문과 문구 질문이 **같은 모양**이다 — 셋 중 하나로 답하고,
+    유형에 "아니오"·"모름" 이면 그 유형의 문구 질문이 전부 사라진다(`0024` P4).
     """
     if kind == "yes":
-        if slot["needs"]:                      # 수치 질문에 "예" 는 답이 아니다
-            return "bad"
         state[key] = True
     elif kind == "no":
-        if slot["needs"]:
-            state.pop(key, None)
-            state[slot["kind"]] = False
-            return "no"
         state[key] = False
     elif kind == "unsure":
         state[key] = C.UNSURE
-    elif kind == "number":
-        value = parse_number(raw, slot["unit"])
-        if value is None:
-            return "bad"
-        state[key] = value
-        state.setdefault(key.rpartition("_")[0], True)
+    else:
+        return "bad"
     return kind
 
 
@@ -220,6 +295,8 @@ def run(stamp: str, group: str, term: int, top: int,
     print(f"\n=== 되묻기 질문 루프 · {group} {term}개월 · 스냅샷 {stamp} ===")
     print(f"상품 {len(rows)}개 · 전부 답하면 질문 {total}개입니다. "
           f"언제든 '그만' 을 입력하면 멈춥니다.")
+    print("'아니오'·'모르겠다' 로 답하면 그 조건에 딸린 문구 질문까지 같이 사라져 "
+          "전체 질문 수가 줄어듭니다.")
     print("\n■ 1단계 — 아무것도 묻지 않은 첫 화면 (조건을 다 채웠을 때 순)")
     scored = AB.score_all(rows, by_pair, state, tax)
     show_list(ranked(scored), top)
@@ -246,10 +323,10 @@ def run(stamp: str, group: str, term: int, top: int,
                 quit_why = ("대본이 떨어졌다" if scripted is not None and not scripted
                             else "사용자가 그만뒀다")
                 break
-            kind = apply_answer(state, key, slot, raw, kind)
+            given, kind = kind, apply_answer(state, key, slot, raw, kind)
             if kind != "bad":
                 break
-            print("      못 읽었습니다. [예] [아니오] [모름] 또는 숫자를 입력하세요")
+            print(bad_answer_hint(slot, given))
             if scripted is not None or auto:
                 quit_at, quit_why = step, f"읽을 수 없는 답 '{raw}'"   # 사람이 없으면 못 되묻는다
                 break
@@ -269,20 +346,8 @@ def run(stamp: str, group: str, term: int, top: int,
     print("\n" + "-" * 92)
     print("■ 3단계 — 결과")
     scored = AB.score_all(rows, by_pair, state, tax)
-    main, rest = ranked(scored), [s for s in scored if s["tier"] not in C.MAIN_TIERS]
-    show_list(main, top)
-    st = status_bar(plan, state, scored, total)
-    if rest:
-        print(f"\n  메인 밖 {len(rest)}개 — "
-              + " · ".join(f"{t} {n}" for t, n in
-                           sorted({s['tier']: sum(1 for x in rest if x['tier'] == s['tier'])
-                                   for s in rest}.items())))
-    hard = sorted({c for s in main for c in s.get("caveats", [])}
-                  & {"조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요"})
-    if hard:
-        print("\n  되물어도 못 채우는 사유 — 이 문장을 사용자에게 보여준다")
-        for c in hard:
-            print(f'    {c:<10}"{C.CAVEAT[c]}"')
+    screen, st = render_final_screen(scored, plan, state, total, top)
+    print(screen)
 
     # ── 반증 조건 확인 (`decisions/0024`)
     n_unsure = sum(1 for s in steps if s["answer_kind"] == "unsure")

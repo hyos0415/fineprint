@@ -111,12 +111,8 @@ def curve(stamp: str, group: str, term: int) -> list[dict]:
             print(f"{'':>8} {'-' * 62}  <- 평가 예산 {C.ASK_BUDGET}개까지")
         if not left:
             break
-        key, slot = left[0]
-        if slot["needs"]:                     # 임계가 있으면 가장 높은 임계를 넘겨 답한다
-            state[key] = max(slot["needs"])
-            state.setdefault(key.rpartition("_")[0], True)
-        else:
-            state[key] = True
+        key, _slot = left[0]
+        state[key] = True                     # 유형이든 문구든 "예" 다 (`prereg-10`)
 
     at = next((r for r in log if r["답한질문"] == C.ASK_BUDGET), log[-1])
     total = len(rows)
