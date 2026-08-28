@@ -43,6 +43,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -179,13 +180,45 @@ def parse_threshold(item: dict) -> tuple[str, float, str] | None:
 # "추출하기보다 질문" 이고, 질문으로 낼 수 있는 것은 위 8문구였다 (`prereg-08` §0).
 
 
-def threshold_question(item: dict) -> tuple[str, str, float, str] | None:
-    """이 조건을 판정하려면 무엇을 물어야 하는가. (상태 키, 단위, 값, 방향)"""
-    parsed = parse_threshold(item)
-    if parsed is None:
+# ── 임계는 숫자로 받지 않고 **문구로 묻는다** (`prereg-10` · 2026-08-28)
+#
+# **왜 바꿨나** — 사람이 22개를 직접 답해 보니 수치 질문에 답이 존재하지 않았다.
+# 한 유형 아래 **대상이 서로 다른 문구**가 묶여 있기 때문이다.
+#
+#     타상품_보유동시가입 — 금액이 얼마입니까?
+#         "②적립식예금 잔액 10만원 이상 보유"
+#         "수익증권(펀드)을 3천만원 이상 보유 시"
+#         "정기예금 500만원이상(만기 1년이상) 가입하고 만기일 전일까지 유지"
+#
+# 적립식예금 잔액·펀드 보유액·정기예금 가입액은 **같은 축이 아니다.** 숫자 하나로
+# 답할 수 없고, 입력 폼으로 바꿔도 필드 하나로는 못 받는다.
+#
+# **그래서 판정 단위를 (유형)에서 (유형 + 문구)로 내린다.** 공시 문구가 질문 옆의
+# 참고 자료가 아니라 **질문 문장 자체**가 된다 — `0024` P1 이 강해지는 방향이고,
+# 사용자는 자기 상황을 그 문구에 대조하기만 하면 된다(숫자 계산이 사라진다).
+#
+# **키는 문구 해시다.** `0018` 이 정렬 2순위를 *"내용에 무관한 기준을 일부러 골랐다"* 로
+# 못 박았으므로 문구 텍스트를 그대로 키로 쓰지 않는다. 같은 문구는 항상 같은 키가
+# 된다(`0020` 자기 일관성과 같은 성질).
+CLAUSE_HASH_BYTES = 4        # 8자 16진수. 실측 문구 종수는 권역당 100 미만이다
+
+
+def clause_key(item: dict) -> str:
+    """`카드실적#a3f1c2d9` — 조건 유형 + 근거 문구 해시."""
+    ev = re.sub(r"\s+", " ", (item.get("evidence") or "")).strip()
+    h = hashlib.blake2s(ev.encode("utf-8"), digest_size=CLAUSE_HASH_BYTES).hexdigest()
+    return f"{item.get('condition_type')}#{h}"
+
+
+def threshold_question(item: dict) -> str | None:
+    """임계가 붙은 조건을 판정하려면 무엇을 물어야 하는가 — **문구 단위 상태 키**.
+
+    계단식(단계가 둘 이상)이면 `None` 이다. 예/아니오로도 판정할 수 없다 —
+    "10회면 0.3%p, 15회면 0.5%p" 인데 우리는 0.5%p 만 알기 때문이다(`0023`).
+    """
+    if parse_threshold(item) is None:
         return None
-    unit, value, direction = parsed
-    return f"{item.get('condition_type')}_{unit}", unit, value, direction
+    return clause_key(item)
 
 
 def question_for(item: dict, state: dict) -> dict | None:
@@ -202,14 +235,14 @@ def question_for(item: dict, state: dict) -> dict | None:
     if answered == UNSURE:
         return None                      # 이미 물었고 "모르겠다" 였다
     if answered and has_threshold(item):
-        q = threshold_question(item)
-        if q is None:
-            return None                  # 계단식 — 수치를 받아도 금리를 모른다
-        key, unit, need, direction = q
-        if state.get(key) == UNSURE:
-            return None                  # 수치를 물었고 "모르겠다" 였다 — 다시 물어도 같다
-        return {"key": key, "kind": kind, "unit": unit, "need": need,
-                "direction": direction, "evidence": item.get("evidence") or ""}
+        key = threshold_question(item)
+        if key is None:
+            return None                  # 계단식 — 예/아니오로도 금리를 모른다
+        if state.get(key) is not None:
+            return None                  # 이미 그 문구를 물었다 (모름 포함)
+        # **문구가 질문 문장이 된다** (`prereg-10`). 임계 수치를 받지 않는다
+        return {"key": key, "kind": kind, "unit": "예아니오", "need": None,
+                "direction": None, "evidence": item.get("evidence") or ""}
     if answered is None:
         return {"key": kind, "kind": kind, "unit": "예아니오", "need": None,
                 "direction": None, "evidence": item.get("evidence") or ""}
@@ -228,13 +261,13 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
         elif state.get(kind) == UNSURE:
             out.append("모름")
         elif state.get(kind) and has_threshold(it):
-            q = threshold_question(it)
-            if q is None:
+            key = threshold_question(it)
+            if key is None:
                 out.append("단계불명")
-            elif state.get(q[0]) == UNSURE:
-                out.append("모름")       # 수치를 물었고 "모르겠다" 였다 — 되물어도 안 없어진다
+            elif state.get(key) == UNSURE:
+                out.append("모름")       # 문구를 물었고 "모르겠다" 였다 — 되물어도 안 없어진다
             else:
-                out.append("수치필요")
+                out.append("미응답")     # 문구 질문에 아직 답하지 않았다 (`prereg-10`)
         else:
             out.append("미응답")
     if any(it.get("condition_type") in ONGOING for it in items_met):
@@ -422,7 +455,7 @@ def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
             plan.setdefault(kind, set())
             q = threshold_question(it) if has_threshold(it) else None
             if q:
-                plan[kind].add(q[0])
+                plan[kind].add(q)             # 문구 단위 후속 질문 (`prereg-10`)
     return plan
 
 
@@ -452,7 +485,7 @@ def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
             if q["need"] is not None:
                 slot["needs"].add(q["need"])
             if q["evidence"]:
-                slot["evidence"].add(q["evidence"][:74])
+                slot["evidence"].add(q["evidence"])   # 자르지 않는다 (`prereg-10` §6)
     return sorted(asks.items(), key=lambda kv: (-len(kv[1]["codes"]), kv[0]))
 
 
@@ -487,7 +520,6 @@ MAIN_TIERS = ("확정", "범위")            # 메인 화면에 올리는 층
 #   되물어도 안 없어진다   추첨·랜덤 지급 · 단계별 금리가 공시에 안 나옴
 CAVEAT = {
     "미응답":    "답하지 않은 조건이 있습니다. 답하면 금리가 확정됩니다",
-    "수치필요":  "금액·횟수를 답하면 금리가 확정됩니다",
     "모름":      "사용자가 모른다고 답한 조건이 있어 금리를 확정할 수 없습니다",
     "추첨":      "추첨·랜덤으로 주는 우대금리가 포함돼 있어 실제 금리는 더 낮을 수 있습니다",
     "단계불명":  "충족 정도에 따라 금리가 달라지는 조건이 있는데 공시에 단계가 다 나와 있지 "
@@ -551,16 +583,15 @@ def condition_met(item: dict, state: dict) -> bool | None:
     if value is None or value == UNSURE:
         return None
     if value and has_threshold(item):
-        # B안 — 임계 수치를 물어서 받았으면 비교한다. 없으면 판정 불가(A안과 같다)
-        q = threshold_question(item)
-        if q is None:
-            return None                       # 계단식 우대 등 — 임계가 하나가 아니다
-        key, _unit, need, direction = q
+        # **문구 단위로 묻고 그 답을 그대로 쓴다** (`prereg-10`). 임계 비교를 하지
+        # 않는다 — 임계는 이미 문구 안에 적혀 있고, 사용자는 그 문구에 답한다.
+        key = threshold_question(item)
+        if key is None:
+            return None                       # 계단식 우대 등 — 단계를 모른다
         got = state.get(key)
-        if not isinstance(got, (int, float)) or isinstance(got, bool):
-            return None                       # 아직 안 물어봤다
-        ok = got >= need if direction == "최소" else got <= need
-        return (not ok) if item.get("polarity") == "must_not_have" else ok
+        if got is None or got == UNSURE:
+            return None                       # 아직 안 물어봤다 / 모른다고 답했다
+        return (not got) if item.get("polarity") == "must_not_have" else bool(got)
     return (not value) if item.get("polarity") == "must_not_have" else bool(value)
 
 
@@ -651,11 +682,11 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     # 되물으면 판정할 수 있는 것과, 물어도 판정할 수 없는 것(계단식)을 가른다
     ask, ladder = [], 0
     for it in thr_unknown:
-        q = threshold_question(it)
-        if q is None:
+        key = threshold_question(it)
+        if key is None:
             ladder += 1
         else:
-            ask.append(q)
+            ask.append({"key": key, "evidence": it.get("evidence") or ""})
     # 임계뿐 아니라 **못 판정한 모든 항목**을 되묻는다 (`decisions/0016`)
     questions = [q for q in (question_for(it, state) for it in rng["unknown"]) if q]
     caveat_codes = caveats_for(rng["unknown"], rng["met"], state)
@@ -664,7 +695,7 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     # 낮출 수 있는 사유뿐이다 (이행필요·추첨·단계불명).
     if rng["hi"] == rng["lo"]:
         caveat_codes = [c for c in caveat_codes
-                        if c not in ("미응답", "수치필요", "모름")]
+                        if c not in ("미응답", "모름")]
     base = row["base"]
     gross_lo, gross_hi = round(base + rng["lo"], 4), round(base + rng["hi"], 4)
     exempt = bool(state.get("_비과세종합저축_대상"))
@@ -732,7 +763,7 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "questions": questions,
         "caveats": caveat_codes,
         "caveat_text": [CAVEAT[c] for c in caveat_codes],
-        "ask": [{"key": k, "unit": u, "need": v, "direction": d} for k, u, v, d in ask],
+        "ask": ask,
         "n_met": len(rng["met"]), "n_unmet": len(rng["unmet"]), "n_unknown": len(rng["unknown"]),
         "met": [i["condition_type"] for i in rng["met"]],
         "unmet": [i["condition_type"] for i in rng["unmet"]],

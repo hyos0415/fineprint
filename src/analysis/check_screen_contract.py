@@ -75,23 +75,15 @@ def check_state(screen: str, scored: list[dict], tax: dict) -> list[dict]:
 
 
 def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> tuple[str, str]:
-    """(원문, 종류). 페르소나면 고정, 무작위면 시드로 뽑는다."""
-    if persona == "예":
-        if slot["needs"]:
-            return f"{int(max(slot['needs']))}", "number"
-        return "예", "yes"
-    if persona == "아니오":
-        return "아니오", "no"
-    if persona == "모름":
-        return "모름", "unsure"
+    """(원문, 종류). 페르소나면 고정, 무작위면 시드로 뽑는다.
+
+    `prereg-10` 뒤로 유형 질문과 문구 질문이 같은 모양이라 답은 셋뿐이다 —
+    수치 경로가 사라졌다.
+    """
+    if persona:
+        return {"예": ("예", "yes"), "아니오": ("아니오", "no"),
+                "모름": ("모름", "unsure")}[persona]
     assert rng is not None
-    if slot["needs"]:
-        # 임계 주변으로 뽑는다 — 넘는 답·못 넘는 답이 다 나와야 판정 양쪽이 밟힌다
-        choice = rng.choice(["number", "number", "unsure", "no"])
-        if choice == "number":
-            base = rng.choice(sorted(slot["needs"]))
-            return f"{int(max(0, base * rng.choice([0.5, 0.9, 1.0, 1.5, 2.0])))}", "number"
-        return ("모름", "unsure") if choice == "unsure" else ("아니오", "no")
     kind = rng.choice(["yes", "no", "unsure"])
     return ({"yes": "예", "no": "아니오", "unsure": "모름"}[kind], kind)
 
