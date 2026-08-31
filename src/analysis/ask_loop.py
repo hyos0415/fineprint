@@ -81,6 +81,46 @@ def fmt_need(value: float, unit: str) -> str:
     return f"{value / 10000:,.0f}만원" if value >= 10000 else f"{value:,.0f}원"
 
 
+# 화면 맨 위 두 줄. **문자열을 여기 한 곳에 두고 검사기가 같은 상수를 읽는다** —
+# 렌더와 검사가 따로 문구를 갖고 있으면 한쪽만 고쳐도 통과한다.
+#
+# `NOTICE` 는 **A안**이다 (이슈 #31 · `0035`) — 우리는 금융상품판매업자가 아니고,
+# 법 §22① 이 판매업자등이 아닌 자의 "광고" 를 금지한다. 그래서 이 화면이 무엇인지를
+# 화면 안에서 말한다. **법적 판정을 우리가 내리지 않는다** — "광고가 아니다" 라고
+# 선언하는 대신 **우리가 하는 일과 안 하는 일**을 적는다. 그게 사실이고, 판정은
+# 사실 위에서 남이 한다.
+#
+# `tax_label` 은 **B안**이다 — 공정위 예규 「금융상품 등의 표시·광고에 관한 심사지침」
+# Ⅴ.1.마 가 *"수익률(이자율) 표기시 '세전'인지 '세후'인지를 누락하여 표시·광고하는
+# 것은 부당한 표시·광고에 해당할 수 있다"* 고 적는다. 우리는 규제 적용 대상인지가
+# 아직 안 갈렸지만(#31) **판매업자에게 요구되는 수준을 그대로 지킨다**.
+#
+# **`calculate.py` 목록에는 헤더에 `세후`·`세전` 이 있었는데 이 화면에는 없었다**
+# (2026-08-31 · `0035`). 그리고 사용자가 실제로 보는 것은 이 화면이다.
+NOTICE = C.NOTICE          # 사본을 두지 않는다 — 문구는 `calculate` 에 하나뿐이다
+
+
+def tax_label(scored: list[dict]) -> str:
+    """세후 라벨. **세율을 문자열에 박지 않고 계산에 쓴 값을 그대로 읽는다.**
+
+    `config/tax-2026.json` 이 바뀌면 이 줄도 같이 바뀐다 — 우리가 손으로 적은
+    `15.4%` 가 config 와 어긋나는 자리를 만들지 않는다(`0032` 가 세율을 조문에
+    핀으로 박은 것과 같은 이유다).
+    """
+    rates = {s.get("tax_rate", 0.0) for s in scored}
+    if len(rates) != 1:                     # 상품별로 세율이 갈리면 뭉뚱그리면 안 된다
+        return "금리는 모두 세후입니다 — 세율이 상품마다 다릅니다"
+    r = rates.pop()
+    if r <= 1e-9:
+        return "금리는 모두 세후입니다 — 비과세 대상이라 세금 0%"
+    return f"금리는 모두 세후입니다 — 이자소득세 등 {r * 100:.1f}% 를 뗀 값입니다"
+
+
+def screen_header(scored: list[dict]) -> list[str]:
+    """화면 맨 위 두 줄 — 화면 계약 A12(세후 라벨) · A13(성격 고지)."""
+    return [f"  {tax_label(scored)}", f"  {NOTICE}"]
+
+
 def span(s: dict) -> str:
     """**범위는 범위로 보여준다** — `design.md` 화면 계약 1번. 같을 때만 숫자 하나다."""
     if abs(s["net_hi"] - s["net_lo"]) < 1e-9:
@@ -256,7 +296,9 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
     """
     main = ranked(scored, prefs)
     rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
-    lines = [product_line(i, s) for i, s in enumerate(main[:top], 1)]
+    # A12·A13 — 세후 라벨과 성격 고지는 **금리보다 위**에 둔다 (`0035`)
+    lines = screen_header(scored)
+    lines += [product_line(i, s) for i, s in enumerate(main[:top], 1)]
     bar, st = status_lines(plan, state, scored, total, start, prefs)
     lines += bar
     # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
