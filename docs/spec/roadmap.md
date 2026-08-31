@@ -1,7 +1,8 @@
 # 전체 과업 지도 — 파이프라인을 완성하려면 무엇이 남았나
 
 > 작성 2026-08-31 · 현재 상태와 다음 할 일은 [`../../START-HERE.md`](../../START-HERE.md) ·
-> 부품별 계약은 [`design.md`](./design.md) · 문제 정의는 [`problem.md`](./problem.md)
+> 부품별 계약은 [`design.md`](./design.md) · 문제 정의는 [`problem.md`](./problem.md) ·
+> **수집이 어떻게 도는지는 [`collection-pipeline.md`](./collection-pipeline.md)**
 
 ## 이 문서는 계약이 아니라 지도다
 
