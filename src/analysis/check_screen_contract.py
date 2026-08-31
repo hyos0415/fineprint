@@ -18,6 +18,7 @@
     A5  net_hi 가 공시 최고금리(세후)를 넘지 않는다
     A6  화면의 "답한 질문 N" 이 실제로 답한 횟수와 같다 (`0028` — 나중에 추가했다)
     A7  스코프가 걸린 화면에는 **스코프 밖 최고 금리**가 있어야 한다 (`0028` S4)
+    A8  성과 줄의 범위가 실제 1위 상품의 net_lo~net_hi 와 같아야 한다 (`0029`)
 
     검사 대상 화면은 `ask_loop.render_final_screen()` 이다 — **사용자가 12번째 질문에서
     그만두면 보는 것이 정확히 그 화면**이므로, 모든 중간 상태에 대해 같은 함수를 읽는다.
@@ -114,6 +115,13 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         if prev_left is not None and st["left"] > prev_left:      # A4
             bad.append({"assert": "A4", "product": "-", "session": tag, "step": step,
                         "detail": f"남은 질문 {prev_left} → {st['left']} 로 늘었다"})
+        main_now = L.ranked(scored)                               # A8
+        if main_now:
+            want = L.span(main_now[0])
+            if want not in screen or main_now[0]["name"][:20] not in screen:
+                bad.append({"assert": "A8", "product": main_now[0]["name"],
+                            "session": tag, "step": step,
+                            "detail": f"성과 줄에 1위 {want} 가 없다"})
         if st["answered"] != step:                                # A6
             bad.append({"assert": "A6", "product": "-", "session": tag, "step": step,
                         "detail": f"화면의 '답한 질문' {st['answered']} ≠ 실제 답한 수 {step}"})
@@ -172,7 +180,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A4", "남은 질문 수가 늘지 않는다"),
                        ("A5", "공시 최고금리 상한"),
                        ("A6", "'답한 질문' 이 실제 답한 수와 같다"),
-                       ("A7", "스코프 밖 최고 금리를 보여준다")):
+                       ("A7", "스코프 밖 최고 금리를 보여준다"),
+                       ("A8", "성과 줄이 1위 상품과 일치한다")):
         hits = codes.get(name, [])
         mark = "통과" if not hits else f"**불통과 {len(hits)}건**"
         print(f"  {name}  {text:<34}{mark}")

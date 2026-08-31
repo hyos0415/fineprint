@@ -119,35 +119,53 @@ def show_list(items: list[dict], top: int | None, prev: list[str] | None = None)
         print(line)
 
 
-def status_lines(plan: dict, state: dict, scored: list[dict],
-                 total: int) -> tuple[list[str], dict]:
-    """상태바 — 숫자 둘을 나란히 (`decisions/0024` P4) · 분모는 줄어든다 (`0028`).
-
-    진행만 보여주면 "모르겠다" 가 "아니오" 와 똑같이 진전으로 보인다. 둘 다 질문을
-    지우는데 "모르겠다" 는 금리를 하나도 좁히지 못한다. 확정 상품 수가 그 차이를 가른다.
+def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
+                 start: dict | None = None) -> tuple[list[str], dict]:
+    """상태바 — 진행 · 성과(내 금리 범위) · 확정 수 (`0024` P4 → `0029` 개정).
 
     **"답한 질문" 은 실제로 답한 수다.** 옛 화면은 `전체 - 남은` 을 답한 수로 표시해
     11개 답한 사람에게 "22개" 라고 말했다 — 거짓이었다(`calculate.questions_answered`).
     줄어드는 것은 **전체(분모)** 다.
+
+    **성과는 "내 금리 범위" 다** (`0029`). `0024` P4 는 확정 상품 수를 성과로 놨는데,
+    사람 세션에서 *"진행 바밖에 안 보인다"* 가 나왔다 — 후보 4개짜리 스코프에서는
+    확정 수가 6개 질문 동안 **0으로 고정**돼 있었다(폭은 1.18 → 0.51 로 움직였다).
+    확정 수는 후보 집합 크기에 종속이고, 범위 폭은 그렇지 않다.
+
+    **확정 수를 버리지는 않는다** — "모르겠다" 와 "아니오" 를 가르는 유일한 숫자라
+    부 지표로 남긴다. **1위 상품명을 같이 적는다** — 답하는 도중 1위가 바뀌므로
+    (`0017`), 안 적으면 다른 상품끼리의 비교가 같은 상품이 좁아진 것처럼 읽힌다.
     """
     left = C.questions_left(plan, state)
     answered = C.questions_answered(plan, state)
     now_total = answered + left
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     fixed = sum(1 for s in main if s["tier"] == "확정")
+    top = ranked(scored)[0] if main else None
     bar_w = 32
     filled = 0 if not now_total else round(answered / now_total * bar_w)
     shrunk = f"  (전체 {total}→{now_total}개)" if now_total < total else ""
     lines = [f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
              f"답한 질문 {answered}/{now_total}개 · 남은 질문 {left}개{shrunk}"]
-    lines.append(f"  성과  금리가 정해진 상품 {fixed}/{len(main)}개")
-    return lines, {"left": left, "answered": answered, "total_now": now_total,
-                   "done": answered, "fixed": fixed, "main": len(main),
-                   "top1": main and ranked(scored)[0]["net_hi"] or 0.0}
+    st = {"left": left, "answered": answered, "total_now": now_total,
+          "done": answered, "fixed": fixed, "main": len(main),
+          "top1": top["net_hi"] if top else 0.0,
+          "top1_lo": top["net_lo"] if top else 0.0,
+          "top1_name": top["name"] if top else "",
+          "width": round(top["net_hi"] - top["net_lo"], 4) if top else 0.0}
+    if top:
+        # 성과 — 사용자가 실제로 얻는 것. A8 이 이 줄과 상품 목록의 일치를 검사한다
+        moved = ""
+        if start and abs(start.get("width", st["width"]) - st["width"]) > 1e-9:
+            moved = f"  (폭 {start['width']:.2f} → {st['width']:.2f}%p)"
+        lines.append(f"  성과  최고 {span(top)}  {top['name'][:20]}{moved}")
+        lines.append(f"        금리가 정해진 상품 {fixed}/{len(main)}개")
+    return lines, st
 
 
-def status_bar(plan: dict, state: dict, scored: list[dict], total: int) -> dict:
-    lines, st = status_lines(plan, state, scored, total)
+def status_bar(plan: dict, state: dict, scored: list[dict], total: int,
+               start: dict | None = None) -> dict:
+    lines, st = status_lines(plan, state, scored, total, start)
     for line in lines:
         print(line)
     return st
@@ -195,7 +213,8 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
 
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
                         top: int | None, outside: dict | None = None,
-                        total_all: int | None = None) -> tuple[str, dict]:
+                        total_all: int | None = None,
+                        start: dict | None = None) -> tuple[str, dict]:
     """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
 
     루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
@@ -204,7 +223,7 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
     main = ranked(scored)
     rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
     lines = [product_line(i, s) for i, s in enumerate(main[:top], 1)]
-    bar, st = status_lines(plan, state, scored, total)
+    bar, st = status_lines(plan, state, scored, total, start)
     lines += bar
     if rest:
         tally = {t: sum(1 for x in rest if x["tier"] == t) for t in
@@ -346,6 +365,7 @@ def run(stamp: str, group: str, term: int, top: int,
     scored = AB.score_all(rows, by_pair, state, tax)
     show_list(ranked(scored), top)
     st = status_bar(plan, state, scored, total)
+    start = dict(st)                     # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`)
     out0 = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
         print(f"\n  ⚠ 스코프 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
@@ -386,7 +406,7 @@ def run(stamp: str, group: str, term: int, top: int,
         scored = AB.score_all(rows, by_pair, state, tax)
         print(f"\n      → '{raw}' 로 받았습니다")
         show_list(ranked(scored), 3, prev)
-        st = status_bar(plan, state, scored, total)
+        st = status_bar(plan, state, scored, total, start)
         steps.append({"step": step, "key": key, "kind": slot["kind"],
                       "unit": slot["unit"], "products": len(slot["codes"]),
                       "answer_kind": kind, "answer": raw,
@@ -398,7 +418,7 @@ def run(stamp: str, group: str, term: int, top: int,
     scored = AB.score_all(rows, by_pair, state, tax)
     outside = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     screen, st = render_final_screen(scored, plan, state, total, top,
-                                     outside, total_all if scoped else None)
+                                     outside, total_all if scoped else None, start)
     print(screen)
 
     # ── 반증 조건 확인 (`decisions/0024`)
