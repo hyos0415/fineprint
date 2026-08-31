@@ -786,6 +786,26 @@ def after_tax(rate: float, tax: dict, exempt: bool = False) -> tuple[float, floa
     return round(rate * (1 - r), 4), r
 
 
+def condition_detail(it: dict) -> dict:
+    """조건 하나가 금리에 무엇을 했나 — F1 비교 리포트가 읽는다 (이슈 #33).
+
+    **왜 따로 담나.** 아래 `met`/`unmet`/`unknown` 은 `condition_type` **이름만**
+    남긴다. 그 모양을 화면 계약 검사와 질문 루프가 읽고 있어서 못 바꾸는데, 그러면
+    `problem.md` §3 이 약속한 *"채운 조건: 급여이체 +0.5 · 카드실적 +0.7"* 을 쓸
+    데이터가 화면까지 오지 않는다 — %p 와 공시 문구 원문이 여기서 버려졌다.
+
+    원천에는 다 있다(2026-08-31 재고 조사 — 은행권 12개월 추출 항목 242개 중 `rate`
+    가 있는 것 238개 · `evidence` 가 있는 것 242개). 계산의 근거가 그것이기 때문이다.
+    """
+    return {
+        "type": it.get("condition_type") or "",
+        "pp": sane_rate(it),
+        "evidence": (it.get("evidence") or "").strip(),
+        "group": it.get("exclusive_group") or None,
+        "threshold": has_threshold(it),
+    }
+
+
 def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     """상품 한 행을 사용자 상태로 채점한다."""
     raw_items = extracted.get("items", []) if extracted else []
@@ -883,6 +903,9 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "tier": tier,
         "message": TIER_MESSAGE.get(tier, ""),
         "raw_hi": raw_hi, "clamped": raw_hi > row["max"] + 0.001,
+        # 상한에 걸리기 **전**의 하단. 리포트가 "조건이 얼마를 올렸나" 를
+        # 쓸 때 필요하다 — `gross_lo` 는 이미 상한을 먹은 값이다 (이슈 #33)
+        "raw_lo": raw_lo,
         "declared_lo": dec_lo, "declared_hi": dec_hi, "band": band,
         "name": row["name"], "kind": row["kind"], "code": row["code"], "term": row["term"],
         # 행·상품의 신원 (`prereg-13`). `code` 만으로는 상품을 셀 수 없다
@@ -903,6 +926,11 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "met": [i["condition_type"] for i in rng["met"]],
         "unmet": [i["condition_type"] for i in rng["unmet"]],
         "unknown": [i["condition_type"] for i in rng["unknown"]],
+        # F1 — 위 세 줄은 **이름만** 남긴다. 리포트가 읽을 근거를 여기 담는다
+        # (조건별 %p · 공시 문구 원문 · 배타 그룹 · 임계 여부). 이슈 #33
+        "why": {"met": [condition_detail(i) for i in rng["met"]],
+                "unmet": [condition_detail(i) for i in rng["unmet"]],
+                "unknown": [condition_detail(i) for i in rng["unknown"]]},
         "cap": cap,
         "explainable": abs(unexplained) <= TOLERANCE,
         "unexplained_pp": unexplained,
@@ -918,9 +946,9 @@ def main() -> None:
         print(P.survey())
         return
     group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
-    company, kinds, prefs_arg = None, None, None
+    company, kinds, prefs_arg, report_n = None, None, None, 0
     for flag in ("--group", "--term", "--top", "--state", "--sort",
-                 "--company", "--kind", "--prefs"):
+                 "--company", "--kind", "--prefs", "--report"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -934,12 +962,13 @@ def main() -> None:
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
             prefs_arg = v if flag == "--prefs" else prefs_arg
+            report_n = int(v) if flag == "--report" else report_n
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
                          "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]\n"
-                         "        [--prefs 확실성=많이,...]  [--survey]")
+                         "        [--prefs 확실성=많이,...] [--report 3] [--survey]")
     if order not in ("hi", "lo"):
         raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
     import prefs as _P                   # 파싱만 먼저 — 잘못된 값을 일찍 잡는다
@@ -1182,6 +1211,15 @@ def main() -> None:
     print("상한은 증상만 막는다. 넘치는 상품은 우리 추출 문제이고 raw_hi 로 남겨 측정에 쓴다")
 
     out = OUT_DIR / f"recommend{suffix}_{stamp}_{term}m.json"
+    # F1 비교 리포트 — 상위 N개의 "왜 이 금리인가" (이슈 #33). 목록은 한 줄이라
+    # 조건별 %p 와 공시 문구가 들어갈 자리가 없다
+    if report_n:
+        import report as R
+        print("\n" + "=" * 96)
+        print(f"■ 비교 리포트 — 상위 {report_n}개")
+        print("=" * 96)
+        print(R.render_all(scored, report_n, prefs))
+
     out.write_text(json.dumps({"snapshot": stamp, "group": group, "term": term,
                                "state": state, "tax": tax["적용_시점"],
                                "products": scored}, ensure_ascii=False, indent=2),
