@@ -450,6 +450,37 @@ ASK_BUDGET = 12          # 평가에 반영하는 질문 개수. 수확 체감�
 # 전체에서만 잰다 — 스코프로 확정률을 올리는 도피를 막는다.
 
 
+# ── 가입 채널 — 편의성 축 1번을 화면에 올린다 (이슈 #22 · `problem.md` §6)
+#
+# **왜** — 2026-08-31 사람 세션에서 스코프 밖 금리 경고(A7)를 보고도 안 넓힌 이유가
+# *"주거래도 아니고 연고도 없고 실물을 본 적도 없다"* 였다. 그 판단에 필요한 정보가
+# **비대면 가입 가능 여부**인데 화면에 없었다. `join_way` 는 765상품에 다 채워져 있다.
+#
+#     은행권 97      영업점에서만 0건 (0%)      · 비대면에서만 51건 (53%)
+#     저축은행 668   영업점에서만 **263건 (39%)** · 비대면에서만 356건 (53%)
+#
+# **점수에 넣지 않는다.** `problem.md` §6 이 정한 대로 편의성은 **축으로 보여주고**
+# 가중치는 사용자가 정한다. 선호 가중치(로드맵 D7)가 들어오기 전까지는 표시만 한다.
+#
+# **빈 값은 추측하지 않는다** — 2건이 비어 있고 `채널미상` 으로 낸다.
+NONFACE = ("인터넷", "스마트폰")        # 비대면으로 치는 채널
+
+
+def channel_label(join_way: str) -> str:
+    """`join_way` 를 화면 한 단어로. 모르면 `채널미상` 이다 — 추측하지 않는다."""
+    if not join_way:
+        return "채널미상"
+    nonface = any(k in join_way for k in NONFACE)
+    branch = "영업점" in join_way
+    if nonface and branch:
+        return "비대면·영업점"
+    if nonface:
+        return "비대면"
+    if branch:
+        return "영업점만"
+    return "채널미상"                   # 전화·기타 뿐인 경우 — 실측 0건이지만 열어 둔다
+
+
 def scope_rows(rows: list[dict], company: str | None = None,
                kinds: str | None = None) -> list[dict]:
     """후보 집합을 자른다. 기관은 부분 일치다 — `"우리"` 로 `우리은행` 이 걸린다."""
@@ -802,6 +833,8 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "declared_lo": dec_lo, "declared_hi": dec_hi, "band": band,
         "name": row["name"], "kind": row["kind"], "code": row["code"], "term": row["term"],
         "company": row.get("company", ""),          # 스코프 축 (`decisions/0028`)
+        "join_way": row.get("join_way", ""),        # 가입 채널 (이슈 #22)
+        "channel": channel_label(row.get("join_way", "")),
         "base": base, "disclosed_max": row["max"],
         "gross_lo": gross_lo, "gross_hi": gross_hi,
         "net_lo": net_lo, "net_hi": net_hi, "tax_rate": rate_used,
