@@ -35,11 +35,12 @@ def survey(stamp: str, group: str, term: int) -> dict:
     rows, by_pair = AB.load(stamp, group, term)
     if not rows:
         raise SystemExit(f"{term}개월 상품이 없다")
-    scored = {}
-    for s in AB.score_all(rows, by_pair, {}, tax):
-        scored.setdefault(s["code"], s)
-    main = [r for r in rows if scored[r["code"]]["tier"] in C.MAIN_TIERS]
-    best_all = max((scored[r["code"]]["net_hi"] for r in main), default=0.0)
+    # **행으로 짝짓는다** (`prereg-13` · 이슈 #25). 전에는 `code` 를 키로 썼는데
+    # 상품코드가 유일하지 않아(저축은행 297행 = 92 code) 같은 코드의 여러 행이
+    # **첫 행의 채점 결과**를 함께 썼다. 서로 다른 기본금리를 가진 줄들이다.
+    scored = {C.row_key(s): s for s in AB.score_all(rows, by_pair, {}, tax)}
+    main = [r for r in rows if scored[C.row_key(r)]["tier"] in C.MAIN_TIERS]
+    best_all = max((scored[C.row_key(r)]["net_hi"] for r in main), default=0.0)
     total_q = C.questions_left(C.question_plan(rows, by_pair), {})
 
     print(f"\n=== 스코프 조사 · {group} {term}개월 · 스냅샷 {stamp} ===")
@@ -58,8 +59,8 @@ def survey(stamp: str, group: str, term: int) -> dict:
                 continue
             plan = C.question_plan(sub, by_pair)
             q = C.questions_left(plan, {})
-            sub_main = [r for r in sub if scored[r["code"]]["tier"] in C.MAIN_TIERS]
-            best = max((scored[r["code"]]["net_hi"] for r in sub_main), default=0.0)
+            sub_main = [r for r in sub if scored[C.row_key(r)]["tier"] in C.MAIN_TIERS]
+            best = max((scored[C.row_key(r)]["net_hi"] for r in sub_main), default=0.0)
             gap = round(best_all - best, 3)
             row = {"company": co, "kind": kind or "전체", "products": len(sub),
                    "questions": q, "types": len(plan),

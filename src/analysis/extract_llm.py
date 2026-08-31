@@ -247,6 +247,23 @@ def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
                          # **39%가 영업점에서만** 가입된다 — "연고가 없다" 는 판단에
                          # 필요한 정보다 (이슈 #22).
                          "join_way": (product.get("join_way") or "").strip(),
+                         # ── 행의 신원 (`prereg-13` · 이슈 #25)
+                         #
+                         # **행 = (기관코드, 상품코드, 단리/복리, 적립방식)** 이다.
+                         # 조사로 확정했다 — 은행권 79 = 79 · 저축은행 297 = 297 로
+                         # 원천 필드가 행을 남김없이 설명한다(완전 중복 레코드 0건).
+                         #
+                         # **`code` 만으로는 상품을 셀 수 없다.** 상품코드는 기관을
+                         # 넘어 유일하지 않다 — 저축은행 기관명 30종 아래 기관코드가
+                         # 58개이고, 하나저축은행 세 법인(0010378·0010528·0010572)이
+                         # 전부 상품코드 `240001` 을 쓴다. 상품코드만 세면 92개,
+                         # 기관코드까지 보면 **183개**다.
+                         #
+                         # 원천에 있는데 안 담고 있었다 — `kor_co_nm`(#15) ·
+                         # `join_way`(#22) 때와 **같은 자리 세 번째**다.
+                         "co_no": (opt.get("fin_co_no") or "").strip(),
+                         "rate_type": (opt.get("intr_rate_type_nm") or "").strip(),
+                         "rsrv_type": (opt.get("rsrv_type_nm") or "").strip(),
                          "base": r1, "max": r2, "gap": round(r2 - r1, 3)})
     return rows, pairs
 
