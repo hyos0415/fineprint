@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""세율의 근거 조문을 법제처에서 뽑아 스냅샷을 뜨고, 바뀌었는지 대조한다.
+"""근거 조문을 법제처에서 뽑아 스냅샷을 뜨고, 바뀌었는지 대조한다.
+
+보는 것이 두 묶음이다 — **세율**(이슈 #28 · `0032`)과 **광고 규제**(이슈 #30 ·
+`0034`). 바뀔 때 고쳐야 하는 것이 달라서 스냅샷 파일을 나눈다.
+
+    config/tax-sources.json   조문 5개   바뀌면 → config/tax-2026.json 의 **값**
+    config/ad-sources.json    조문 6개   바뀌면 → **화면 계약**(design.md) 과 `0017`
 
 이 파일이 채우는 자리
     `config/tax-2026.json` 이 `"확인_상태": "미확인"` 이었다. 화면의 **모든 세후
@@ -36,10 +42,19 @@
     (로드맵 H1). 세법은 12월 말 공포 → 1월 1일 시행이 기본형이라 1월 수집(1/20 전후)
     에서 잡히고, **최대 20일 지연을 받아들인다.**
 
+광고 규제는 무엇이 다른가
+    **행정규칙(`target=admrul`)이 섞인다.** 금융소비자보호법·시행령은 `law` 지만
+    감독규정은 금융위원회 고시이고 공정위 심사지침은 예규다. 응답 구조가 법령과
+    다르다 — 자세한 것은 `admrul_current`·`admrul_article` 의 주석에 적었다.
+
+    그리고 **바뀌었을 때 사람이 할 일이 다르다.** 세율은 숫자를 고치면 되지만,
+    광고 조문이 바뀌면 화면이 무엇을 강제해야 하는지를 다시 봐야 한다(`0017`).
+
 사용법:
-    python src/ingest/fetch_law.py --check       바뀌었는지만 본다 (2단. 종료코드로 답한다)
-    python src/ingest/fetch_law.py --snapshot    스냅샷을 새로 쓴다 (사람이 확인한 뒤)
-    python src/ingest/fetch_law.py --show 129    조문 원문을 찍어 본다 (사람이 읽으려고)
+    python src/ingest/fetch_law.py --check           바뀌었는지만 본다 (2단. 종료코드로 답한다)
+    python src/ingest/fetch_law.py --snapshot [tax|ad]   스냅샷을 새로 쓴다 (사람이 확인한 뒤)
+    python src/ingest/fetch_law.py --show 129        조문 원문을 찍어 본다 (사람이 읽으려고)
+    python src/ingest/fetch_law.py --show 감독규정      규범 이름으로도 찾는다
 """
 from __future__ import annotations
 
@@ -53,6 +68,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCES = REPO_ROOT / "config" / "tax-sources.json"
+SOURCES_AD = REPO_ROOT / "config" / "ad-sources.json"
 BASE = "https://www.law.go.kr/DRF"
 TIMEOUT = 60
 
@@ -86,6 +102,65 @@ WATCH = [
      "무엇": "조합등예탁금 — 한도 3천만원 · 2026년 가입분 5% · 2027년 이후 9%",
      "config": "세금우대_조합예탁금",
      "볼 문구": "100분의 5"},
+]
+
+# ── 감시 대상 좌표 · 광고 규제 (이슈 #30 · 로드맵 I3)
+#
+# `0017` 이 화면에 강제한 두 가지("최대값을 단독으로 쓰지 않는다" · "최대값 옆에 남은
+# 조건 수를 붙인다")의 **법적 근거**다. `0026` 의 반증 조건이 *"최고금리 단독 표기
+# 제한이 실재한다고 보지만 조문을 확인하지 않았다"* 로 열려 있었다.
+#
+# **여기는 세율과 성질이 다르다.** 세율은 `config/tax-2026.json` 의 **값**이 바뀌지만,
+# 광고 조문이 바뀌면 바뀌는 것은 **화면 계약**(`design.md`)이다. 그래서 스냅샷
+# 파일을 따로 둔다 — `config/ad-sources.json`.
+#
+# **`target` 이 섞여 있다.** 법률·대통령령은 `law` 지만 **감독규정은 행정규칙이라
+# `admrul`** 이고 응답 구조가 다르다(아래 `admrul_article` 주석 참고).
+WATCH_AD = [
+    {"target": "law", "법령": "금융소비자 보호에 관한 법률", "법령ID": "013704",
+     "조": "22", "가지": None,
+     "무엇": "예금성 상품 광고 금지행위 — 이자율의 범위·산정방법을 명확히 표시하지 "
+             "않아 오인하게 하는 행위 (제4항제3호가목)",
+     "화면": "0017 강제 1 (범위로 쓴다) · 화면 계약 A2",
+     "볼 문구": "이자율의 범위ㆍ산정방법"},
+    {"target": "law", "법령": "금융소비자 보호에 관한 법률 시행령", "법령ID": "014044",
+     "조": "18", "가지": None,
+     "무엇": "광고에 포함할 '금융상품의 내용' — 명칭·이자율·수수료와 고시 위임 "
+             "(제1항제1호라목). 감독규정 제17조의 위임 근거다",
+     "화면": "0017 강제 1 의 상위 근거",
+     "볼 문구": "금융위원회가 정하여 고시하는 사항"},
+    {"target": "law", "법령": "금융소비자 보호에 관한 법률 시행령", "법령ID": "014044",
+     "조": "20", "가지": None,
+     "무엇": "광고 시 금지행위 — 중대한 영향을 미치는 사항을 분명하지 않게 표현하는 "
+             "행위(제1항제5호)와 고시 위임(제1항제6호). 감독규정 제19조의 위임 근거다",
+     "화면": "0017 강제 2 (남은 조건 수) 의 상위 근거",
+     "볼 문구": "분명하지 않게 표현하는 행위"},
+    {"target": "admrul", "법령": "금융소비자 보호에 관한 감독규정", "법령ID": "77048",
+     "조": "17", "가지": None,
+     "무엇": "광고의 내용 — **예금성 상품은 '이자율·수익률 각각의 범위 및 산출기준'** "
+             "을 광고에 포함해야 한다 (제1항제3호가목)",
+     "화면": "0017 강제 1 과 문구가 그대로 대응한다",
+     "볼 문구": "이자율ㆍ수익률 각각의 범위 및 산출기준"},
+    {"target": "admrul", "법령": "금융소비자 보호에 관한 감독규정", "법령ID": "77048",
+     "조": "19", "가지": None,
+     "무엇": "광고 시 금지행위 — **소비자에 따라 달라질 수 있는 거래조건을 누구에게나 "
+             "적용될 수 있는 것처럼 오인하게 만드는 행위** (제1항제1호·제3항제1호)",
+     "화면": "0017 강제 2 가 막으려는 것과 같은 자리",
+     "볼 문구": "누구에게나 적용될 수 있는 것처럼 오인하게 만드는 행위"},
+    # 조문 좌표가 없다 — 이 예규는 `조문내용` 이 **문자열 하나**로 온다(장·절 구분이
+    # 로마숫자다). 그래서 `조: None` 으로 두고 전문을 해시한다.
+    {"target": "admrul", "법령": "금융상품 등의 표시·광고에 관한 심사지침",
+     "법령ID": "55352", "조": None, "가지": None,
+     "무엇": "공정거래위원회 예규 — Ⅴ.1.마 **'세전'인지 '세후'인지를 누락하면 부당한 "
+             "표시·광고**. 법 제22조제5항이 표시광고법을 함께 적용한다고 정한다",
+     "화면": "세전·세후 라벨 (CLI 헤더 '세후 확정~최대' · '세전')",
+     "볼 문구": "‘세전’인지 ‘세후’인지를 누락하여"},
+]
+
+# `--check` 가 도는 스냅샷 묶음. 세율과 광고 규제는 **바뀔 때 고쳐야 하는 것이 다르다**
+SNAPSHOTS = [
+    ("세율", SOURCES, WATCH, "config/tax-2026.json 의 값"),
+    ("광고 규제", SOURCES_AD, WATCH_AD, "화면 계약(design.md) 과 `0017`"),
 ]
 
 
@@ -168,6 +243,95 @@ def article(mst: str, jo: str, ga: str | None) -> dict:
     raise SystemExit(f"조문을 못 찾았다: MST {mst} {label}")
 
 
+def admrul_current(rule_name: str, rule_id: str) -> dict:
+    """**1단 · 행정규칙** — 목록 조회. `target=admrul` 은 필드 이름이 법령과 다르다.
+
+    ```
+    법령                        행정규칙
+    법령ID        ← 핀 →        행정규칙ID
+    법령일련번호   ← 매번 새로 → 행정규칙일련번호   (본문 조회의 `ID` 파라미터다)
+    공포일자/번호  ← 대응 →      발령일자/발령번호
+    현행연혁코드                 현행연혁구분
+    ```
+
+    **본문 조회가 `MST` 가 아니라 `ID` 로 간다** — 그리고 그 `ID` 는 `행정규칙ID`(77048)
+    가 아니라 **`행정규칙일련번호`**(2100000276850) 다. 헷갈리면 조용히 옛 판을 읽는다.
+    """
+    got = _get("lawSearch.do", target="admrul", query=rule_name)
+    items = got.get("AdmRulSearch", {}).get("admrul", [])
+    if isinstance(items, dict):
+        items = [items]
+    for it in items:
+        if it.get("행정규칙ID") == rule_id and it.get("현행연혁구분") == "현행":
+            return {"법령명": it["행정규칙명"], "법령ID": it["행정규칙ID"],
+                    "법령일련번호": it["행정규칙일련번호"], "시행일자": it["시행일자"],
+                    "공포일자": it["발령일자"], "공포번호": it["발령번호"],
+                    "제개정구분": it.get("제개정구분명", ""),
+                    "종류": it.get("행정규칙종류", ""), "소관": it.get("소관부처명", "")}
+    raise SystemExit(f"현행 행정규칙을 못 찾았다: {rule_name} (행정규칙ID {rule_id})")
+
+
+def admrul_article(seq: str, jo: str | None, ga: str | None) -> dict:
+    """**2단 · 행정규칙** — 본문에서 조문 하나를 뽑는다.
+
+    **법령과 응답 구조가 다르다.** 법령은 `조문단위[]` 가 dict 리스트(조문번호·
+    조문가지번호·조문여부·조문시행일자 필드가 따로 있다)인데, 행정규칙은
+    `조문내용` 이 **문자열 리스트**다 — `"제17조(광고의 내용) ① …"` 처럼 조문번호가
+    본문 앞머리에 붙어 있을 뿐이고 좌표 필드가 없다. 그래서 정규식으로 앞머리를 읽는다.
+
+    **같은 `target` 안에서도 형태가 갈린다** — 예규(공정위 심사지침)는 `조문내용` 이
+    **문자열 하나**로 온다(장·절이 로마숫자라 조문 단위가 아니다). 그때는 `jo=None`
+    으로 불러 전문을 쓴다.
+
+    법령 쪽 함정(`조문여부='전문'` 인 편·장 헤더가 같은 조문번호로 섞인다)에 대응하는
+    것을 찾아봤는데 **감독규정에는 없었다** — 36개 원소가 전부 `제N조` 로 시작하고
+    좌표 중복이 0이었다(2026-08-31 확인). 다만 `조문형식여부: N` 인 행정규칙도 있으니
+    조문을 못 찾으면 죽는 쪽으로 둔다.
+    """
+    got = _get("lawService.do", target="admrul", ID=seq)
+    body = got["AdmRulService"]["조문내용"]
+    title = got["AdmRulService"]["행정규칙기본정보"]["행정규칙명"]
+    if jo is None:                       # 조문 좌표가 없는 예규 — 전문을 쓴다
+        whole = body if isinstance(body, str) else "\n".join(body)
+        return {"조문제목": "전문", "조문시행일자": None,
+                "본문": re.sub(r"\s+", " ", whole).strip()}
+    if isinstance(body, str):
+        raise SystemExit(f"조문 단위가 아닌 행정규칙이다 — jo=None 으로 부른다: {title}")
+    label = f"제{jo}조" + (f"의{ga}" if ga else "")
+    for text in body:
+        m = re.match(r"\s*제(\d+)조(?:의(\d+))?", text)
+        if not m:
+            continue
+        if m.group(1) != str(jo) or (m.group(2) or None) != (str(ga) if ga else None):
+            continue
+        head = re.match(r"\s*제\d+조(?:의\d+)?\(([^)]*)\)", text)
+        return {"조문제목": head.group(1) if head else "",
+                "조문시행일자": None,     # 행정규칙에는 조문 단위 시행일자가 없다
+                "본문": re.sub(r"\s+", " ", text).strip()}
+    raise SystemExit(f"조문을 못 찾았다: {title} {label} (행정규칙일련번호 {seq})")
+
+
+def head_of(w: dict) -> dict:
+    """`target` 에 맞는 1단 조회. 스냅샷 행의 모양을 하나로 맞춘다."""
+    if w.get("target", "law") == "admrul":
+        return admrul_current(w["법령"], w["법령ID"])
+    return current(w["법령"], w["법령ID"])
+
+
+def article_of(w: dict, seq: str) -> dict:
+    """`target` 에 맞는 2단 조회.
+
+    **두 모양의 dict 를 다 받는다** — WATCH 항목(`조`·`가지`)과 스냅샷 행
+    (`조문번호`·`조문가지번호`)이다. 원래 코드는 `check()` 에서 스냅샷 행의 필드를
+    직접 풀어 넘겼는데, 여기로 모으면서 이름이 안 맞아 한 번 깨졌다.
+    """
+    jo = w["조"] if "조" in w else w.get("조문번호")
+    ga = w["가지"] if "가지" in w else w.get("조문가지번호")
+    if w.get("target", "law") == "admrul":
+        return admrul_article(seq, jo, ga)
+    return article(seq, jo, ga)
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
@@ -180,72 +344,100 @@ def excerpt(text: str, needle: str, span: int = 120) -> str:
     return text[max(0, i - span // 2): i + len(needle) + span]
 
 
-def build() -> dict:
+def build(watch: list[dict], 무엇: str, 고칠_곳: str) -> dict:
     out = {
-        "_설명": "세율의 근거 조문 스냅샷. 사람이 확인한 시점의 원문·해시를 박아 둔다. "
-                 "기계는 '바뀌었다' 까지만 말하고 세율 반영은 사람이 한다 (이슈 #28)",
+        "_설명": f"{무엇} 의 근거 조문 스냅샷. 사람이 확인한 시점의 원문·해시를 박아 둔다. "
+                 f"기계는 '바뀌었다' 까지만 말하고 {고칠_곳} 은 사람이 고친다",
         "출처": f"{BASE}/lawSearch.do · {BASE}/lawService.do (법제처 국가법령정보 공동활용)",
         "조문": [],
     }
     laws: dict[str, dict] = {}
-    for w in WATCH:
-        head = laws.get(w["법령ID"]) or current(w["법령"], w["법령ID"])
+    for w in watch:
+        head = laws.get(w["법령ID"]) or head_of(w)
         laws[w["법령ID"]] = head
-        art = article(head["법령일련번호"], w["조"], w["가지"])
-        label = f"제{w['조']}조" + (f"의{w['가지']}" if w["가지"] else "")
+        art = article_of(w, head["법령일련번호"])
+        label = ("전문" if w["조"] is None
+                 else f"제{w['조']}조" + (f"의{w['가지']}" if w["가지"] else ""))
         found = w["볼 문구"] in art["본문"]
-        out["조문"].append({
+        row = {
+            "target": w.get("target", "law"),
             "법령": head["법령명"], "법령ID": head["법령ID"], "조문": label,
             "조문번호": w["조"], "조문가지번호": w["가지"],
             "조문제목": art["조문제목"],
-            "무엇": w["무엇"], "config": w["config"],
+            "무엇": w["무엇"],
             "시행일자": head["시행일자"], "공포일자": head["공포일자"],
             "공포번호": head["공포번호"], "조문시행일자": art["조문시행일자"],
             "본문해시": digest(art["본문"]), "본문길이": len(art["본문"]),
             "볼_문구": w["볼 문구"], "볼_문구_있나": found,
             "인용": excerpt(art["본문"], w["볼 문구"]),
-        })
+        }
+        if "config" in w:
+            row["config"] = w["config"]        # 세율 — 고칠 곳이 config 값이다
+        if "화면" in w:
+            row["화면"] = w["화면"]            # 광고 규제 — 고칠 곳이 화면 계약이다
+        out["조문"].append(row)
     return out
 
 
-def check() -> int:
-    """커밋된 스냅샷과 대조한다. **1단에서 끝나면 본문을 안 긁는다.**"""
-    if not SOURCES.exists():
-        print(f"스냅샷이 없다: {SOURCES.relative_to(REPO_ROOT)} — 먼저 --snapshot")
-        return 2
-    old = json.loads(SOURCES.read_text(encoding="utf-8"))
+def check_one(무엇: str, path: Path, 고칠_곳: str) -> tuple[int, int, int]:
+    """스냅샷 하나를 대조한다. **1단에서 끝나면 본문을 안 긁는다.**
+
+    돌려주는 것 — (규범 수, 조문 수, 바뀐 조문 수). 스냅샷이 없으면 (-1, 0, 0).
+    """
+    if not path.exists():
+        print(f"  스냅샷이 없다: {path.relative_to(REPO_ROOT)} — 먼저 --snapshot")
+        return -1, 0, 0
+    old = json.loads(path.read_text(encoding="utf-8"))
     by_law: dict[str, list[dict]] = {}
     for row in old["조문"]:
         by_law.setdefault(row["법령ID"], []).append(row)
 
-    print("\n=== 세율 근거 조문 대조 (이슈 #28) ===")
-    print("1단 — 목록 조회로 법령일련번호·시행일자·공포번호를 본다 (본문은 안 긁는다)\n")
-    changed, checked = [], 0
+    changed, checked = 0, 0
     for law_id, rows in by_law.items():
-        head = current(rows[0]["법령"], law_id)
+        head = head_of(rows[0])
         checked += 1
         same = (head["시행일자"] == rows[0]["시행일자"]
                 and head["공포번호"] == rows[0]["공포번호"])
         mark = "그대로" if same else "**바뀌었다**"
-        print(f"  {head['법령명']:<12}시행 {head['시행일자']} · 공포 "
+        print(f"  {head['법령명'][:24]:<26}시행 {head['시행일자']} · 공포 "
               f"{head['공포일자']}/{head['공포번호']}   {mark}")
         if same:
             continue
         print(f"    2단 — 본문을 긁어 조문 {len(rows)}개를 대조한다")
         for row in rows:
-            art = article(head["법령일련번호"], row["조문번호"], row["조문가지번호"])
+            art = article_of(row, head["법령일련번호"])
             if digest(art["본문"]) == row["본문해시"]:
                 print(f"      {row['조문']:<12}조문은 그대로")
                 continue
-            changed.append((row, head, art))
-            print(f"      {row['조문']:<12}**조문이 바뀌었다** — {row['무엇']}")
-            print(f"        config 의 {row['config']} 를 사람이 다시 읽어야 한다")
+            changed += 1
+            print(f"      {row['조문']:<12}**조문이 바뀌었다** — {row['무엇'][:60]}")
+            print(f"        {row.get('config') or row.get('화면')} 를 사람이 다시 봐야 한다")
+    print(f"  {무엇} — 규범 {checked}개 · 조문 {len(old['조문'])}개 · "
+          f"바뀐 조문 {changed}개")
+    return checked, len(old["조문"]), changed
 
-    print(f"\n  법령 {checked}개 · 조문 {len(old['조문'])}개")
-    if not changed:
-        print("  **바뀐 조문 없음.** config/tax-2026.json 을 그대로 쓴다")
+
+def check() -> int:
+    """커밋된 스냅샷 둘을 대조한다 — 세율(이슈 #28) · 광고 규제(이슈 #30).
+
+    **1단은 목록 조회뿐이다** — 규범 하나당 2.5KB. 바뀐 규범만 본문을 긁는다(1.3MB).
+    """
+    print("\n=== 근거 조문 대조 ===")
+    print("1단 — 목록 조회로 일련번호·시행일자·공포(발령)번호를 본다 (본문은 안 긁는다)")
+    total_changed, missing = 0, 0
+    for 무엇, path, _watch, 고칠_곳 in SNAPSHOTS:
+        print(f"\n[{무엇}]  바뀌면 고칠 곳 — {고칠_곳}")
+        checked, _n, changed = check_one(무엇, path, 고칠_곳)
+        if checked < 0:
+            missing += 1
+            continue
+        total_changed += changed
+    if missing:
+        return 2
+    if not total_changed:
+        print("\n  **바뀐 조문 없음.** 세율표와 화면 계약을 그대로 쓴다")
         return 0
-    print(f"  **바뀐 조문 {len(changed)}개.** 세율 반영은 사람이 한다 — 자동으로 안 고친다")
+    print(f"\n  **바뀐 조문 {total_changed}개.** 반영은 사람이 한다 — 자동으로 안 고친다")
     print("  `python src/ingest/fetch_law.py --show <조문번호>` 로 원문을 읽는다")
     return 1
 
@@ -257,32 +449,44 @@ def main() -> None:
     if "--show" in argv:
         i = argv.index("--show")
         want = argv[i + 1] if i + 1 < len(argv) else ""
-        for w in WATCH:
-            label = f"제{w['조']}조" + (f"의{w['가지']}" if w["가지"] else "")
-            if want not in (w["조"], label):
-                continue
-            head = current(w["법령"], w["법령ID"])
-            art = article(head["법령일련번호"], w["조"], w["가지"])
-            print(f"\n=== {head['법령명']} {label}({art['조문제목']}) ===")
-            print(f"시행 {head['시행일자']} · 공포 {head['공포일자']}/{head['공포번호']} "
-                  f"· 조문시행 {art['조문시행일자']}\n")
-            print(art["본문"])
-            return
-        raise SystemExit(f"감시 대상에 없는 조문이다: {want}")
+        for _무엇, _path, watch, _고칠_곳 in SNAPSHOTS:
+            for w in watch:
+                label = ("전문" if w["조"] is None
+                         else f"제{w['조']}조" + (f"의{w['가지']}" if w["가지"] else ""))
+                if want not in (w["조"], label, w["법령"]):
+                    continue
+                head = head_of(w)
+                art = article_of(w, head["법령일련번호"])
+                print(f"\n=== {head['법령명']} {label}({art['조문제목']}) ===")
+                print(f"시행 {head['시행일자']} · 공포(발령) {head['공포일자']}/"
+                      f"{head['공포번호']} · 조문시행 {art['조문시행일자']}\n")
+                print(art["본문"])
+                return
+        raise SystemExit(f"감시 대상에 없는 조문이다: {want}\n"
+                         f"조문번호 · 규범 이름 중 하나로 부른다")
     if "--snapshot" in argv:
-        snap = build()
-        SOURCES.write_text(json.dumps(snap, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
-        print(f"→ {SOURCES.relative_to(REPO_ROOT)}")
-        for row in snap["조문"]:
-            flag = "" if row["볼_문구_있나"] else "   ** 볼 문구를 못 찾았다 **"
-            print(f"  {row['법령']:<12}{row['조문']:<10}{row['조문시행일자']} "
-                  f"{row['본문해시']}  {row['무엇']}{flag}")
+        i = argv.index("--snapshot")
+        which = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("-") else ""
+        if which and which not in ("tax", "ad"):
+            raise SystemExit("--snapshot [tax|ad] — 비우면 둘 다 뜬다")
+        pick = {"tax": ["세율"], "ad": ["광고 규제"]}.get(which, ["세율", "광고 규제"])
+        for 무엇, path, watch, 고칠_곳 in SNAPSHOTS:
+            if 무엇 not in pick:
+                continue
+            snap = build(watch, 무엇, 고칠_곳)
+            path.write_text(json.dumps(snap, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+            print(f"→ {path.relative_to(REPO_ROOT)}  ({무엇})")
+            for row in snap["조문"]:
+                flag = "" if row["볼_문구_있나"] else "   ** 볼 문구를 못 찾았다 **"
+                print(f"  {row['법령'][:22]:<24}{row['조문']:<10}"
+                      f"{row['조문시행일자'] or '-':<9} {row['본문해시']}  "
+                      f"{row['무엇'][:44]}{flag}")
         return
     if "--check" in argv or not argv:
         raise SystemExit(check())
     raise SystemExit("사용법: python src/ingest/fetch_law.py "
-                     "[--check | --snapshot | --show <조문번호>]")
+                     "[--check | --snapshot [tax|ad] | --show <조문번호|규범이름>]")
 
 
 if __name__ == "__main__":

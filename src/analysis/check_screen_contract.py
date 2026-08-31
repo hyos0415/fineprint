@@ -24,6 +24,11 @@
         한다 (`prereg-12` §4 · `problem.md` §3 — "시스템이 마음대로 정했다" 를 막는다)
     A11 `--prefs` 를 걸어도 상품별 `net_lo`·`net_hi`·`tier`·`caveats` 가 안 걸었을
         때와 **완전히 같아야 한다** — 가중치는 정렬만 바꾼다 (`prereg-12` §4)
+    A12 금리를 보여주는 화면에는 **`세후` 라벨**이 있어야 한다 (`0034`·`0035` ·
+        이슈 #31). 공정위 예규 「금융상품 등의 표시·광고에 관한 심사지침」 Ⅴ.1.마 —
+        *"수익률(이자율) 표기시 '세전'인지 '세후'인지를 누락"* 하면 부당한 표시·광고다
+    A13 화면에 **이 화면이 무엇인지 밝히는 고지**가 있어야 한다 (`0035` · A안) —
+        공시 계산 결과이며 판매·중개하지 않는다는 사실
 
     **A11 이 #24 의 핵심 방어선이다.** 가중치가 판정에 새면 사용자의 취향이 "이 상품의
     금리가 얼마인가" 라는 사실을 바꾸는 것이고, 그 순간 `problem.md` §4 의
@@ -64,10 +69,33 @@ EPS = 1e-6
 A3_CODES = tuple(C.CAVEAT.keys())
 
 
+def check_labels(screen: str) -> list[dict]:
+    """A12·A13 — 화면이 **무엇을 말하는 숫자인지**와 **자기가 무엇인지**를 밝히나.
+
+    문구는 `ask_loop` 의 상수를 읽는다 — 검사기가 자기 사본을 갖고 있으면 렌더 쪽만
+    고쳐도 통과한다.
+
+    **이 검사를 만든 이유가 실제 누락이다** — `calculate.py` 목록 헤더에는
+    `세후 확정~최대`·`세전` 이 있었는데 **질문 루프 화면에는 `세후` 라는 말이 한
+    번도 없었다**(2026-08-31 · `0035`). 사용자가 보는 것은 이 화면이다.
+    """
+    bad = []
+    if "%" in screen and "세후" not in screen:
+        bad.append({"assert": "A12", "product": "-",
+                    "detail": "금리가 있는 화면에 `세후` 라벨이 없다"})
+    if L.NOTICE not in screen:
+        bad.append({"assert": "A13", "product": "-",
+                    "detail": "성격 고지가 화면에 없다"})
+    return bad
+
+
 def check_state(screen: str, scored: list[dict], tax: dict,
                 prefs: dict | None = None) -> list[dict]:
-    """한 중간 상태의 화면에 대해 A1·A2·A3·A5·A9 를 본다. A4 는 세션 단위라 따로."""
-    bad = []
+    """한 중간 상태의 화면에 대해 A1·A2·A3·A5·A9·A12·A13 을 본다.
+
+    A4 는 세션 단위라 따로 본다.
+    """
+    bad = check_labels(screen)                  # A12·A13 (`0035`)
     main = L.ranked(scored, prefs)
     for i, s in enumerate(main, 1):
         line = L.product_line(i, s)
@@ -285,7 +313,9 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A8", "성과 줄이 1위 상품과 일치한다"),
                        ("A9", "가입 채널 표시가 원천과 일치한다"),
                        ("A10", "가중치가 보이고 고칠 수 있다"),
-                       ("A11", "가중치는 정렬만 바꾼다")):
+                       ("A11", "가중치는 정렬만 바꾼다"),
+                       ("A12", "금리 옆에 `세후` 라벨이 있다"),
+                       ("A13", "화면이 자기가 무엇인지 밝힌다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue
