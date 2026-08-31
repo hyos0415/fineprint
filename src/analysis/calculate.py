@@ -481,6 +481,37 @@ def channel_label(join_way: str) -> str:
     return "채널미상"                   # 전화·기타 뿐인 경우 — 실측 0건이지만 열어 둔다
 
 
+# ── 신원 (`prereg-13` · 이슈 #25)
+#
+# **상품코드는 상품의 신원이 아니다.** 기관을 넘어 유일하지 않다 — 저축은행 기관명
+# 30종 아래 기관코드가 58개이고, 하나저축은행 세 법인이 전부 상품코드 `240001`
+# "정기예금" 을 쓴다. 상품코드만 세면 92개, 기관코드까지 보면 **183개**다.
+#
+# 이 버그는 화면에서 거짓말로 나왔다 — 질문 루프가 *"이 답 하나가 상품 N개의 판정을
+# 엽니다"* 라고 쓰는데 그 N 이 92 기준이었다. #24 에서 화면 계약 A11 이 2,388건
+# 불통과로 뜬 것이 실마리였고(짝을 코드로 지었다), 쫓아가니 화면 쪽 버그였다.
+#
+# **한 곳에서만 계산한다.** 두 곳에서 다르게 세면 이 버그가 그대로 재발한다.
+def product_key(s: dict) -> tuple:
+    """상품 하나의 신원 — `(기관코드, 상품코드)`. 사용자에게 "정기예금" 은 하나다."""
+    return (s.get("co_no") or "", s["code"])
+
+
+def row_key(s: dict) -> tuple:
+    """행 하나의 신원 — `(기관코드, 상품코드, 단리/복리, 적립방식)`.
+
+    조사로 확정했다 — 은행권 79 = 79 · 저축은행 297 = 297 로 **원천 필드가 행을
+    남김없이 설명한다**(완전 중복 레코드 0건이라 수집 문제도 아니다).
+
+    **행과 상품은 다른 것을 잰다** (`prereg-13` §1). 같은 상품의 단리 행은 닫히고
+    복리 행은 안 닫힐 수 있으니 **행은 추출 품질의 단위**이고, 사용자에게 "정기예금"
+    은 하나이니 **상품은 화면의 단위**다. 지금까지 코드가 우연히 그렇게 돼 있었고
+    아무 데도 안 적혀 있었다.
+    """
+    return (s.get("co_no") or "", s["code"],
+            s.get("rate_type") or "", s.get("rsrv_type") or "")
+
+
 def scope_rows(rows: list[dict], company: str | None = None,
                kinds: str | None = None) -> list[dict]:
     """후보 집합을 자른다. 기관은 부분 일치다 — `"우리"` 로 `우리은행` 이 걸린다."""
@@ -550,19 +581,29 @@ def questions_left(plan: dict[str, set[str]], state: dict) -> int:
 
 
 def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
-    """되물을 질문을 **고정된 우선순위**로 줄 세운다. 위 주석이 그 규칙이다."""
+    """되물을 질문을 **고정된 우선순위**로 줄 세운다. 위 주석이 그 규칙이다.
+
+    **1순위가 세는 것은 `product_key()` 로 센 상품 수다** (`prereg-13` · 이슈 #25).
+    전에는 `code` 로 셌고, 그래서 서로 다른 저축은행 법인의 같은 상품코드가 하나로
+    합쳐졌다 — 저축은행 상품이 92개로 보였다(참값 183). 규칙을 바꾼 것이 아니라
+    **규칙이 이미 "상품 커버리지" 라고 말하던 것을 그대로 계산되게 고친 것**이다.
+
+    이 함수는 화면 문구(*"이 답 하나가 상품 N개를 엽니다"*)와 질문 순서를 **동시에**
+    만든다. 그래서 화면을 고치면 순서가 바뀌고 예산 12개 확정률이 움직인다 —
+    재등록 사유·편향 방향·완화 조치는 `prereg-13` §2 에 **고치기 전에** 적었다.
+    """
     asks: dict[str, dict] = {}
     for s in scored:
         for q in s.get("questions", []):
-            slot = asks.setdefault(q["key"], {"unit": q["unit"], "codes": set(),
+            slot = asks.setdefault(q["key"], {"unit": q["unit"], "products": set(),
                                               "needs": set(), "kind": q["kind"],
                                               "evidence": set()})
-            slot["codes"].add(s["code"])
+            slot["products"].add(product_key(s))
             if q["need"] is not None:
                 slot["needs"].add(q["need"])
             if q["evidence"]:
                 slot["evidence"].add(q["evidence"])   # 자르지 않는다 (`prereg-10` §6)
-    return sorted(asks.items(), key=lambda kv: (-len(kv[1]["codes"]), kv[0]))
+    return sorted(asks.items(), key=lambda kv: (-len(kv[1]["products"]), kv[0]))
 
 
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
@@ -832,6 +873,9 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
         "raw_hi": raw_hi, "clamped": raw_hi > row["max"] + 0.001,
         "declared_lo": dec_lo, "declared_hi": dec_hi, "band": band,
         "name": row["name"], "kind": row["kind"], "code": row["code"], "term": row["term"],
+        # 행·상품의 신원 (`prereg-13`). `code` 만으로는 상품을 셀 수 없다
+        "co_no": row.get("co_no", ""), "rate_type": row.get("rate_type", ""),
+        "rsrv_type": row.get("rsrv_type", ""),
         "company": row.get("company", ""),          # 스코프 축 (`decisions/0028`)
         "join_way": row.get("join_way", ""),        # 가입 채널 (이슈 #22)
         "channel": channel_label(row.get("join_way", "")),
@@ -1092,7 +1136,7 @@ def main() -> None:
                 tail = f"임계 {needs}{more}"
             else:
                 tail = "예 / 아니오 / 모르겠다"
-            print(f"    {key:<30}상품 {len(slot['codes']):>3}개   {tail}")
+            print(f"    {key:<30}상품 {len(slot['products']):>3}개   {tail}")
             for ev in sorted(slot["evidence"])[:2]:
                 print(f"        공시 문구  \"{ev}\"")
         if len(ordered) > ASK_BUDGET:

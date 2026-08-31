@@ -108,7 +108,10 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
     """
     move = ""
     if prev is not None:
-        was = prev.index(s["code"]) + 1 if s["code"] in prev else None
+        # 화살표가 가리키는 것은 **이 줄**이다 — 같은 상품의 단리·복리가 각각
+        # 한 줄이므로 `code` 로 찾으면 남의 줄을 가리킨다 (`prereg-13`).
+        me = C.row_key(s)
+        was = prev.index(me) + 1 if me in prev else None
         if was is None:
             move = " NEW"
         elif was != i:
@@ -225,8 +228,8 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
     비교는 **조건을 다 채웠을 때(hi)** 로 한다 — 밖의 상품은 질문을 안 했으므로
     답을 받은 상태가 없다. 화면에도 "조건 다 채웠을 때" 라고 적어야 한다.
     """
-    codes = {r["code"] for r in rows_in}
-    outs = [r for r in rows_all if r["code"] not in codes]
+    inside_keys = {C.row_key(r) for r in rows_in}     # 행 단위 (`prereg-13`)
+    outs = [r for r in rows_all if C.row_key(r) not in inside_keys]
     if not outs:
         return None
     best_out = max(AB.score_all(outs, by_pair, state, tax),
@@ -423,7 +426,7 @@ def run(stamp: str, group: str, term: int, top: int,
         key, slot = ordered[0]
         head, lines = prompt_for(key, slot)
         print(f"\n  [{step}] {head}")
-        print(f"      이 답 하나가 상품 {len(slot['codes'])}개의 판정을 엽니다")
+        print(f"      이 답 하나가 상품 {len(slot['products'])}개의 판정을 엽니다")
         for line in lines:
             print(line)
         while True:
@@ -442,13 +445,13 @@ def run(stamp: str, group: str, term: int, top: int,
                 break
         if quit_at:
             break
-        prev = [s["code"] for s in ranked(scored, prefs)]
+        prev = [C.row_key(s) for s in ranked(scored, prefs)]
         scored = AB.score_all(rows, by_pair, state, tax)
         print(f"\n      → '{raw}' 로 받았습니다")
         show_list(ranked(scored, prefs), 3, prev)
         st = status_bar(plan, state, scored, total, start, prefs)
         steps.append({"step": step, "key": key, "kind": slot["kind"],
-                      "unit": slot["unit"], "products": len(slot["codes"]),
+                      "unit": slot["unit"], "products": len(slot["products"]),
                       "answer_kind": kind, "answer": raw,
                       "seconds": round(time.monotonic() - tick, 1), **st})
         tick = time.monotonic()

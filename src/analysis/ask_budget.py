@@ -59,7 +59,9 @@ def stats(scored: list[dict]) -> dict:
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     fixed = [s for s in main if s["tier"] == "확정"]
     widths = [s["net_hi"] - s["net_lo"] for s in main]
-    top3 = [s["code"] for s in
+    # 상위 3위 교체는 **행** 단위다 — 같은 상품의 단리·복리는 화면에서 다른 줄이다
+    # (`prereg-13`). `code` 로 세면 저축은행에서 서로 다른 법인의 줄이 합쳐진다.
+    top3 = [C.row_key(s) for s in
             sorted(main, key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))[:3]]
     return {"메인": len(main), "확정": len(fixed), "범위": len(main) - len(fixed),
             "폭평균": sum(widths) / len(widths) if widths else 0.0,
@@ -100,7 +102,7 @@ def curve(stamp: str, group: str, term: int) -> list[dict]:
         st = stats(scored)
         swap = "-" if prev_top3 is None else str(len(set(prev_top3) - set(st["top3"])))
         left = pending(scored)
-        nxt = (f"{left[0][0]} ({len(left[0][1]['codes'])}상품 · 남은질문 {len(left)})"
+        nxt = (f"{left[0][0]} ({len(left[0][1]['products'])}상품 · 남은질문 {len(left)})"
                if left else "— 없음")
         print(f"{k:>8} {st['메인']:>5} {st['확정']:>5} {st['범위']:>5} "
               f"{st['폭평균']:>8.3f} {st['폭최대']:>8.3f} {swap:>9}  {nxt}")
