@@ -111,7 +111,10 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
     else:
         left = "확정"
     note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
-    return f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}  {left:<22}{move}{note}"
+    # 가입 채널 — 편의성 축 1번(이슈 #22). **점수에 안 넣고 표시만 한다**(`problem.md` §6).
+    # 저축은행은 39%가 영업점에서만 가입되는데, 그걸 모르면 갈 수 없는 상품을 후보로 본다.
+    ch = f"  [{s['channel']}]" if s.get("channel") else ""
+    return f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}{ch:<16}{left:<22}{move}{note}"
 
 
 def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:
@@ -208,7 +211,8 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
         return None                      # 숨길 것이 없다 — 밖이 더 좋지 않다
     return {"name": best_out["name"], "net_hi": best_out["net_hi"],
             "gap": round(best_out["net_hi"] - best_in, 3),
-            "company": best_out.get("company") or ""}
+            "company": best_out.get("company") or "",
+            "channel": best_out.get("channel") or ""}
 
 
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
@@ -234,7 +238,8 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
         wider = "" if total_all is None else f" · 넓히면 질문이 {total_all}개로 늘어납니다"
         lines.append(f"\n  ⚠ 스코프 밖에 {outside['net_hi']:.2f}% 가 있습니다 "
                      f"({outside['company']} {outside['name'][:22]} · "
-                     f"+{outside['gap']:.2f}%p · 조건 다 채웠을 때){wider}")
+                     f"+{outside['gap']:.2f}%p · [{outside['channel']}] · "
+                     f"조건 다 채웠을 때){wider}")
     shown = {c for s in main for c in s.get("caveats", [])}
     for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
                           ("되물어도 못 채우는 사유", HARD_CAVEATS)):
@@ -370,7 +375,8 @@ def run(stamp: str, group: str, term: int, top: int,
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
         print(f"\n  ⚠ 스코프 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
               f"({out0['company']} {out0['name'][:22]} · +{out0['gap']:.2f}%p · "
-              f"조건 다 채웠을 때) · 넓히면 질문이 {total_all}개로 늘어납니다")
+              f"[{out0['channel']}] · 조건 다 채웠을 때) · "
+              f"넓히면 질문이 {total_all}개로 늘어납니다")
     start_top1 = st["top1"]
     print("\n" + "-" * 92)
     print("■ 2단계 — 질문 루프. 커버리지가 큰 질문부터 묻습니다 (decisions/0018 고정 순서)")

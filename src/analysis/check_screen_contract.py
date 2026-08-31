@@ -19,6 +19,7 @@
     A6  화면의 "답한 질문 N" 이 실제로 답한 횟수와 같다 (`0028` — 나중에 추가했다)
     A7  스코프가 걸린 화면에는 **스코프 밖 최고 금리**가 있어야 한다 (`0028` S4)
     A8  성과 줄의 범위가 실제 1위 상품의 net_lo~net_hi 와 같아야 한다 (`0029`)
+    A9  화면의 가입 채널 표시가 원천 `join_way` 와 일치해야 한다 (이슈 #22)
 
     검사 대상 화면은 `ask_loop.render_final_screen()` 이다 — **사용자가 12번째 질문에서
     그만두면 보는 것이 정확히 그 화면**이므로, 모든 중간 상태에 대해 같은 함수를 읽는다.
@@ -65,6 +66,10 @@ def check_state(screen: str, scored: list[dict], tax: dict) -> list[dict]:
         if s["tier"] == "확정" and width > EPS:
             bad.append({"assert": "A2", "product": s["name"],
                         "detail": f"확정인데 폭 {width:.4f}%p — {line}"})
+        if s.get("channel") != C.channel_label(s.get("join_way", "")):      # A9
+            bad.append({"assert": "A9", "product": s["name"],
+                        "detail": f"화면 [{s.get('channel')}] ≠ join_way "
+                                  f"'{s.get('join_way')}'"})
         net_cap, _ = C.after_tax(s["disclosed_max"], tax)
         if s["net_hi"] > net_cap + EPS:
             bad.append({"assert": "A5", "product": s["name"],
@@ -181,7 +186,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A5", "공시 최고금리 상한"),
                        ("A6", "'답한 질문' 이 실제 답한 수와 같다"),
                        ("A7", "스코프 밖 최고 금리를 보여준다"),
-                       ("A8", "성과 줄이 1위 상품과 일치한다")):
+                       ("A8", "성과 줄이 1위 상품과 일치한다"),
+                       ("A9", "가입 채널 표시가 원천과 일치한다")):
         hits = codes.get(name, [])
         mark = "통과" if not hits else f"**불통과 {len(hits)}건**"
         print(f"  {name}  {text:<34}{mark}")

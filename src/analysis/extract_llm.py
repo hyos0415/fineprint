@@ -242,6 +242,11 @@ def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
                          # 원천에 `kor_co_nm` 으로 있는데 여기 안 담고 있었고, 그래서
                          # 질문이 카탈로그 17개 기관 전체에서 생성됐다.
                          "company": (product.get("kor_co_nm") or "").strip(),
+                         # 가입 채널 — 편의성 축 1번(`problem.md` §6). 765상품에 다
+                         # 채워져 있는데(빈 값 2건) 안 쓰이고 있었다. 저축은행은
+                         # **39%가 영업점에서만** 가입된다 — "연고가 없다" 는 판단에
+                         # 필요한 정보다 (이슈 #22).
+                         "join_way": (product.get("join_way") or "").strip(),
                          "base": r1, "max": r2, "gap": round(r2 - r1, 3)})
     return rows, pairs
 
