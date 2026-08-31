@@ -20,6 +20,14 @@
     A7  스코프가 걸린 화면에는 **스코프 밖 최고 금리**가 있어야 한다 (`0028` S4)
     A8  성과 줄의 범위가 실제 1위 상품의 net_lo~net_hi 와 같아야 한다 (`0029`)
     A9  화면의 가입 채널 표시가 원천 `join_way` 와 일치해야 한다 (이슈 #22)
+    A10 `--prefs` 가 걸린 화면에는 옮긴 가중치가 %p 로 보이고 고치는 방법이 있어야
+        한다 (`prereg-12` §4 · `problem.md` §3 — "시스템이 마음대로 정했다" 를 막는다)
+    A11 `--prefs` 를 걸어도 상품별 `net_lo`·`net_hi`·`tier`·`caveats` 가 안 걸었을
+        때와 **완전히 같아야 한다** — 가중치는 정렬만 바꾼다 (`prereg-12` §4)
+
+    **A11 이 #24 의 핵심 방어선이다.** 가중치가 판정에 새면 사용자의 취향이 "이 상품의
+    금리가 얼마인가" 라는 사실을 바꾸는 것이고, 그 순간 `problem.md` §4 의
+    "틀릴 수 없는 것 / 틀릴 수 있는 것" 구분이 무너진다.
 
     검사 대상 화면은 `ask_loop.render_final_screen()` 이다 — **사용자가 12번째 질문에서
     그만두면 보는 것이 정확히 그 화면**이므로, 모든 중간 상태에 대해 같은 함수를 읽는다.
@@ -31,6 +39,7 @@
 사용법:
     python src/analysis/check_screen_contract.py 20260826 --group bank --term 12
     python src/analysis/check_screen_contract.py 20260826 --seeds 20    (빠른 점검)
+    python src/analysis/check_screen_contract.py 20260826 --prefs 확실성=많이   (A10·A11)
 """
 from __future__ import annotations
 
@@ -44,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ask_budget as AB  # noqa: E402
 import ask_loop as L  # noqa: E402
 import calculate as C  # noqa: E402
+import prefs as P  # noqa: E402
 
 SEEDS = 200          # `prereg-09` §4 에 못 박은 값. 결과를 보고 고치지 않는다
 EPS = 1e-6
@@ -54,10 +64,11 @@ EPS = 1e-6
 A3_CODES = tuple(C.CAVEAT.keys())
 
 
-def check_state(screen: str, scored: list[dict], tax: dict) -> list[dict]:
-    """한 중간 상태의 화면에 대해 A1·A2·A3·A5 를 본다. A4 는 세션 단위라 따로."""
+def check_state(screen: str, scored: list[dict], tax: dict,
+                prefs: dict | None = None) -> list[dict]:
+    """한 중간 상태의 화면에 대해 A1·A2·A3·A5·A9 를 본다. A4 는 세션 단위라 따로."""
     bad = []
-    main = L.ranked(scored)
+    main = L.ranked(scored, prefs)
     for i, s in enumerate(main, 1):
         line = L.product_line(i, s)
         width = s["net_hi"] - s["net_lo"]
@@ -82,6 +93,67 @@ def check_state(screen: str, scored: list[dict], tax: dict) -> list[dict]:
     return bad
 
 
+def check_prefs_shown(screen: str, prefs: dict) -> list[dict]:
+    """A10 — 옮긴 가중치가 **전부** %p 로 보이고 고치는 방법이 적혀 있는가.
+
+    `problem.md` §3 이 *"옮긴 결과를 사용자에게 보여주고 고칠 수 있게 한다. 이게
+    있어야 '시스템이 마음대로 정했다' 가 안 된다"* 고 적어 둔 자리다.
+    """
+    bad = []
+    for key in P.AXES:
+        if key not in prefs:
+            continue
+        v = prefs[key]
+        want = "맨 아래로" if v is P.BLOCK else f"{v:+.2f}%p"
+        if want not in screen:
+            bad.append({"assert": "A10", "product": key,
+                        "detail": f"'{want}' 가 화면에 없다"})
+    if "--prefs" not in screen:
+        bad.append({"assert": "A10", "product": "-",
+                    "detail": "고치는 방법(--prefs)이 화면에 없다"})
+    return bad
+
+
+def check_prefs_isolated(scored: list[dict], rows: list[dict], by_pair: dict,
+                         state: dict, tax: dict) -> list[dict]:
+    """A11 — 선호를 걸어도 **판정이 안 변한다.**
+
+    `scored` 는 선호가 붙은 쪽(`ranked()` 가 `_adj`·`_score` 를 달아 놨다)이고,
+    여기서 선호 없이 같은 상태를 다시 채점해 상품별로 대조한다.
+    `evaluate()` 가 `prefs` 를 인자로 안 받으므로 구조적으로 참이어야 하지만,
+    **구조가 무너지는 순간을 잡는 것이 이 assert 의 존재 이유다** — 조정값을
+    `net_hi` 에 더해 버리는 구현이 가장 쉬운 실수다.
+
+    **`code` 로 짝지으면 안 된다** — 유일하지 않다. 은행권 12개월에서 6개 코드가
+    두 행씩이다(`우리SUPER주거래적금`·`해피라이프_여행스케치적금V` 등. 적립유형만
+    다르고 기본금리가 2.5/2.3 처럼 갈린다). 처음 이 함수를 `code` 로 짝지었더니
+    A11 이 2,388건 불통과로 나왔는데 **전부 짝을 잘못 지은 것**이었다.
+    `AB.score_all()` 은 `rows` 순서를 그대로 지키므로 **자리로 짝짓는다.**
+    """
+    plain = AB.score_all(rows, by_pair, state, tax)
+    if len(plain) != len(scored):
+        return [{"assert": "A11", "product": "-",
+                 "detail": f"상품 수가 다르다: 선호 {len(scored)} ≠ 기준 {len(plain)}"}]
+    bad = []
+    for s, b in zip(scored, plain):
+        for field in ("net_lo", "net_hi"):
+            if abs(s[field] - b[field]) > EPS:
+                bad.append({"assert": "A11", "product": s["name"],
+                            "detail": f"{field} 이 선호에 따라 변했다: "
+                                      f"{b[field]} → {s[field]}"})
+        if s["tier"] != b["tier"]:
+            bad.append({"assert": "A11", "product": s["name"],
+                        "detail": f"tier 가 변했다: {b['tier']} → {s['tier']}"})
+        if sorted(s.get("caveats") or []) != sorted(b.get("caveats") or []):
+            bad.append({"assert": "A11", "product": s["name"],
+                        "detail": f"caveats 가 변했다: {b.get('caveats')} → "
+                                  f"{s.get('caveats')}"})
+        if L.span(s) != L.span(b):
+            bad.append({"assert": "A11", "product": s["name"],
+                        "detail": f"금리 칸이 변했다: {L.span(b)} → {L.span(s)}"})
+    return bad
+
+
 def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> tuple[str, str]:
     """(원문, 종류). 페르소나면 고정, 무작위면 시드로 뽑는다.
 
@@ -98,7 +170,8 @@ def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> t
 
 def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
          persona: str | None = None, seed: int | None = None,
-         rows_all: list[dict] | None = None) -> list[dict]:
+         rows_all: list[dict] | None = None,
+         prefs: dict | None = None) -> list[dict]:
     """세션 하나를 끝까지 걸으며 각 중간 상태를 검사한다. 위반 목록을 낸다."""
     rng = random.Random(seed) if seed is not None else None
     state: dict = {}
@@ -109,24 +182,42 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         scored = AB.score_all(rows, by_pair, state, tax)
         outside = (L.outside_best(rows_all, rows, by_pair, state, tax)
                    if scoped else None)
-        screen, st = L.render_final_screen(scored, plan, state, total, None, outside)
+        screen, st = L.render_final_screen(scored, plan, state, total, None, outside,
+                                           prefs=prefs)
         if outside and f"{outside['net_hi']:.2f}%" not in screen:      # A7
             bad.append({"assert": "A7", "product": outside["name"], "session": "-",
                         "step": step,
                         "detail": f"스코프 밖 최고 {outside['net_hi']:.2f}% 가 화면에 없다"})
         tag = persona or f"seed{seed}"
-        for v in check_state(screen, scored, tax):
+        for v in check_state(screen, scored, tax, prefs):
             bad.append({**v, "session": tag, "step": step})
+        if prefs:                                                  # A10 · A11
+            # `scored` 를 **정렬하지 않은 채로** 넘긴다 — `ranked()` 가 이미 같은
+            # dict 들에 `_adj`·`_score` 를 달아 놨고, 짝짓기는 자리로 한다
+            for v in (check_prefs_shown(screen, prefs)
+                      + check_prefs_isolated(scored, rows, by_pair, state, tax)):
+                bad.append({**v, "session": tag, "step": step})
         if prev_left is not None and st["left"] > prev_left:      # A4
             bad.append({"assert": "A4", "product": "-", "session": tag, "step": step,
                         "detail": f"남은 질문 {prev_left} → {st['left']} 로 늘었다"})
-        main_now = L.ranked(scored)                               # A8
+        main_now = L.ranked(scored, prefs)                        # A8
         if main_now:
             want = L.span(main_now[0])
             if want not in screen or main_now[0]["name"][:20] not in screen:
                 bad.append({"assert": "A8", "product": main_now[0]["name"],
                             "session": tag, "step": step,
                             "detail": f"성과 줄에 1위 {want} 가 없다"})
+            # **낱말도 사실이어야 한다.** A8 이 처음에는 숫자만 봤고, 그래서 선호를
+            # 넣었을 때 성과 줄이 `최고 2.79~2.88%` 라고 쓰는데 **같은 화면 3위에
+            # 3.26% 가 있는** 상태를 못 잡았다(`0030`). 사람이 화면을 읽어서 찾았다.
+            best = max(s["net_hi"] for s in main_now)
+            if (f"성과  최고 {want}" in screen
+                    and main_now[0]["net_hi"] < best - EPS):
+                bad.append({"assert": "A8", "product": main_now[0]["name"],
+                            "session": tag, "step": step,
+                            "detail": f"성과 줄이 '최고' 라고 쓰는데 1위 "
+                                      f"{main_now[0]['net_hi']:.2f}% 위에 "
+                                      f"{best:.2f}% 가 있다"})
         if st["answered"] != step:                                # A6
             bad.append({"assert": "A6", "product": "-", "session": tag, "step": step,
                         "detail": f"화면의 '답한 질문' {st['answered']} ≠ 실제 답한 수 {step}"})
@@ -144,7 +235,8 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
 
 
 def run(stamp: str, group: str, term: int, seeds: int,
-        company: str | None = None, kinds: str | None = None) -> dict:
+        company: str | None = None, kinds: str | None = None,
+        prefs: dict | None = None) -> dict:
     tax = C.load_tax()
     rows_all, by_pair = AB.load(stamp, group, term)
     if not rows_all:
@@ -160,17 +252,21 @@ def run(stamp: str, group: str, term: int, seeds: int,
     if len(rows) < len(rows_all):
         print(f"스코프 기관={company} 상품군={kinds} — 카탈로그 {len(rows_all)}개 중 "
               f"{len(rows)}개. A7 도 검사한다")
+    if prefs:
+        print(f"선호 {prefs.get('_answers')} — A10·A11 도 검사한다")
     print("검사 대상 화면은 ask_loop.render_final_screen() — 중단하면 보는 그 화면이다\n")
 
     t0 = time.monotonic()
     bad, n_states = [], 0
     for persona in ("예", "아니오", "모름"):
-        out = walk(rows, by_pair, plan, total, tax, persona=persona, rows_all=rows_all)
+        out = walk(rows, by_pair, plan, total, tax, persona=persona,
+                   rows_all=rows_all, prefs=prefs)
         n_states += max(s["step"] for s in out) + 1 if out else total + 1
         bad += out
         print(f"  페르소나 {persona:<4} 위반 {len(out)}건")
     for seed in range(seeds):
-        bad += walk(rows, by_pair, plan, total, tax, seed=seed, rows_all=rows_all)
+        bad += walk(rows, by_pair, plan, total, tax, seed=seed,
+                    rows_all=rows_all, prefs=prefs)
         if (seed + 1) % 50 == 0:
             print(f"  시드 {seed + 1:>3}/{seeds} 까지 · 누적 위반 {len(bad)}건 "
                   f"· {time.monotonic() - t0:.0f}초")
@@ -187,7 +283,12 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A6", "'답한 질문' 이 실제 답한 수와 같다"),
                        ("A7", "스코프 밖 최고 금리를 보여준다"),
                        ("A8", "성과 줄이 1위 상품과 일치한다"),
-                       ("A9", "가입 채널 표시가 원천과 일치한다")):
+                       ("A9", "가입 채널 표시가 원천과 일치한다"),
+                       ("A10", "가중치가 보이고 고칠 수 있다"),
+                       ("A11", "가중치는 정렬만 바꾼다")):
+        if name in ("A10", "A11") and not prefs:
+            print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
+            continue
         hits = codes.get(name, [])
         mark = "통과" if not hits else f"**불통과 {len(hits)}건**"
         print(f"  {name}  {text:<34}{mark}")
@@ -211,8 +312,8 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
     group, term, seeds = "bank", 12, SEEDS
-    company, kinds = None, None
-    for flag in ("--group", "--term", "--seeds", "--company", "--kind"):
+    company, kinds, prefs_arg = None, None, None
+    for flag in ("--group", "--term", "--seeds", "--company", "--kind", "--prefs"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -223,12 +324,16 @@ def main() -> None:
             seeds = int(v) if flag == "--seeds" else seeds
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
+            prefs_arg = v if flag == "--prefs" else prefs_arg
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/check_screen_contract.py YYYYMMDD "
-                         "[--group bank|savingsbank] [--term 12] [--seeds 200]")
-    report = run(argv[0], group, term, seeds, company, kinds)
-    out = C.OUT_DIR / f"screen_contract_{group}_{argv[0]}_{term}m.json"
+                         "[--group bank|savingsbank] [--term 12] [--seeds 200] "
+                         "[--company 우리] [--kind 적금] [--prefs 확실성=많이]")
+    prefs = P.parse(prefs_arg)
+    report = run(argv[0], group, term, seeds, company, kinds, prefs)
+    tag = "_prefs" if prefs else ""
+    out = C.OUT_DIR / f"screen_contract_{group}_{argv[0]}_{term}m{tag}.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"→ {out.relative_to(C.REPO_ROOT)} (git 제외)")
 

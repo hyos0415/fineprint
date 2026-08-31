@@ -857,10 +857,14 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
+    if "--survey" in argv:               # 선호 설문 문항과 고정 가중치 표 (`prereg-12`)
+        import prefs as P
+        print(P.survey())
+        return
     group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
-    company, kinds = None, None
+    company, kinds, prefs_arg = None, None, None
     for flag in ("--group", "--term", "--top", "--state", "--sort",
-                 "--company", "--kind"):
+                 "--company", "--kind", "--prefs"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -873,13 +877,17 @@ def main() -> None:
             order = v if flag == "--sort" else order
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
+            prefs_arg = v if flag == "--prefs" else prefs_arg
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
-                         "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]")
+                         "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]\n"
+                         "        [--prefs 확실성=많이,...]  [--survey]")
     if order not in ("hi", "lo"):
         raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
+    import prefs as _P                   # 파싱만 먼저 — 잘못된 값을 일찍 잡는다
+    prefs = _P.parse(prefs_arg)
     stamp = argv[0]
     suffix = "" if group == "bank" else f"_{group}"
 
@@ -967,7 +975,16 @@ def main() -> None:
     # 최고금리인 상품이 은행권 83.5% · 저축은행 96.3%). 그래서 두 가지를 강제한다.
     #   1. 최대값을 단독으로 쓰지 않는다 — 항상 범위로 쓴다 (`design.md` 화면 계약)
     #   2. 최대값 옆에 **남은 조건 수**를 붙인다 — 그 금리가 무료가 아님을 같이 보여준다
-    if order == "hi":
+    #
+    # **선호 가중치가 있으면 세후 가중합 순이다** (`prereg-12` · 이슈 #24). 없으면
+    # 조정이 전부 0 이라 아래 `hi` 순과 소수점까지 같다 — 기본값을 우리가 정하지 않는
+    # 자리다(`0024` P2). `prefs` 는 **여기서만** import 한다. 모듈 수준에서 하면
+    # 순환이고, 무엇보다 `evaluate()` 가 선호를 몰라야 한다(화면 계약 A11).
+    if prefs:
+        import prefs as P
+        P.annotate(scored, prefs)
+        scored.sort(key=P.sort_key)
+    elif order == "hi":
         scored.sort(key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
     else:
         scored.sort(key=lambda x: (-x["net_lo"], -x["net_hi"], x["name"]))
@@ -977,7 +994,8 @@ def main() -> None:
     def show(items: list[dict], label: str) -> None:
         if not items:
             return
-        head = "다 채웠을 때 순" if order == "hi" else "확정된 값 순"
+        head = ("선호 가중합 순" if prefs else
+                "다 채웠을 때 순" if order == "hi" else "확정된 값 순")
         print(f"\n■ {label} ({len(items)}) · {head}")
         print(f"{'순':>3} {'상품':<26}{'세후 확정~최대':>17}{'세전':>13}  {'층':<11}남은 조건")
         print("-" * 104)
@@ -995,6 +1013,12 @@ def main() -> None:
                 note = f" 조건문 우대 {-s['unexplained_pp']:.2f}%p (공시 미반영)"
             if s["clamped"]:
                 note += f" [상한 {s['raw_hi']:.2f}->{s['gross_hi']:.2f}]"
+            # 선호 조정 — **금리 칸이 아니라 사유 칸이다** (`prereg-12` §3 · A11).
+            # 왜 이 순서인지를 같이 낸다 (`problem.md` §3)
+            if s.get("_blocked"):
+                note += "  선호밖(" + " · ".join(s["_why"]) + ")"
+            elif s.get("_adj"):
+                note += f"  조정 {s['_adj']:+.2f}%p(" + " · ".join(s["_why"]) + ")"
             if s.get("caveats"):
                 note += "  주의:" + "·".join(s["caveats"])
             # 남은 조건 수를 금리 옆에 붙인다 — 최대값이 무료가 아님을 같이 보여준다
@@ -1009,6 +1033,9 @@ def main() -> None:
 
     show(main, "메인 - 계산할 수 있는 상품")
     show(rest, "아래 섹션 - 주의가 붙는 상품")
+    # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
+    for line in _P.lines(prefs, sum(1 for s in main if s.get("_blocked"))):
+        print(line)
 
     # ── 상태바 — 숫자 둘을 나란히 놓는다 (`decisions/0024`)
     #

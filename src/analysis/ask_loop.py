@@ -24,6 +24,8 @@
     python src/analysis/ask_loop.py 20260826 --auto 예            # 사람 없이 전부 "예"
     python src/analysis/ask_loop.py 20260826 --answers 예,아니오,모름
     python src/analysis/ask_loop.py 20260826 --company 우리 --kind 적금   # 후보 집합
+    python src/analysis/ask_loop.py 20260826 --prefs 확실성=많이         # 선호 가중치
+    python src/analysis/ask_loop.py 20260826 --survey                  # 설문 문항만 본다
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
+import prefs as P  # noqa: E402
 
 MAX_STEPS = 80          # 무한 루프 방어. 실제 질문 수는 은행권 22 · 저축은행 27 이다
 
@@ -85,10 +88,16 @@ def span(s: dict) -> str:
     return f"{s['net_lo']:.2f}~{s['net_hi']:.2f}%"
 
 
-def ranked(scored: list[dict]) -> list[dict]:
-    """메인 층을 최대 금리 순으로 (`decisions/0017`). 정렬 규칙은 `calculate.main` 과 같다."""
+def ranked(scored: list[dict], prefs: dict | None = None) -> list[dict]:
+    """메인 층을 최대 금리 순으로 (`decisions/0017`). 정렬 규칙은 `calculate.main` 과 같다.
+
+    **`prefs` 를 주면 세후 가중합 순이 된다** (`prereg-12` §3 · 이슈 #24). 안 주면
+    조정이 전부 0 이라 `net_hi` 순과 **소수점까지 같다** — 기본값을 우리가 정하지
+    않는 자리다(`0024` P2).
+    """
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
-    return sorted(main, key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
+    P.annotate(main, prefs or {})
+    return sorted(main, key=P.sort_key)
 
 
 def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
@@ -111,10 +120,19 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
     else:
         left = "확정"
     note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
-    # 가입 채널 — 편의성 축 1번(이슈 #22). **점수에 안 넣고 표시만 한다**(`problem.md` §6).
-    # 저축은행은 39%가 영업점에서만 가입되는데, 그걸 모르면 갈 수 없는 상품을 후보로 본다.
+    # 가입 채널 — 편의성 축 1번(이슈 #22). 선호 가중치(#24)가 들어오기 전까지는 표시만
+    # 했다. 지금은 사용자가 `--prefs 영업점=...` 을 준 **그때만** 점수에 들어간다 —
+    # 우리가 정한 값이 아니다(`problem.md` §6 · `0024` P2).
     ch = f"  [{s['channel']}]" if s.get("channel") else ""
-    return f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}{ch:<16}{left:<22}{move}{note}"
+    # 선호 조정 — **금리 칸이 아니라 별도 칸이다.** 점수를 금리처럼 보여주면 공시에
+    # 없는 숫자를 사용자에게 보여주는 것이다 (`prereg-12` §3 · 화면 계약 A11).
+    adj = ""
+    if s.get("_blocked"):
+        adj = "  선호밖"
+    elif s.get("_adj"):
+        adj = f"  조정 {s['_adj']:+.2f}%p"
+    return (f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}{ch:<16}{left:<22}"
+            f"{adj}{move}{note}")
 
 
 def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:
@@ -123,7 +141,8 @@ def show_list(items: list[dict], top: int | None, prev: list[str] | None = None)
 
 
 def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
-                 start: dict | None = None) -> tuple[list[str], dict]:
+                 start: dict | None = None,
+                 prefs: dict | None = None) -> tuple[list[str], dict]:
     """상태바 — 진행 · 성과(내 금리 범위) · 확정 수 (`0024` P4 → `0029` 개정).
 
     **"답한 질문" 은 실제로 답한 수다.** 옛 화면은 `전체 - 남은` 을 답한 수로 표시해
@@ -144,7 +163,9 @@ def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
     now_total = answered + left
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     fixed = sum(1 for s in main if s["tier"] == "확정")
-    top = ranked(scored)[0] if main else None
+    # **1위는 화면 목록의 1위여야 한다** — 선호가 걸리면 목록 순서가 바뀌므로 여기도
+    # 같은 정렬을 써야 한다. 안 그러면 화면 계약 A8(성과 줄 = 1위 상품)이 깨진다
+    top = ranked(scored, prefs)[0] if main else None
     bar_w = 32
     filled = 0 if not now_total else round(answered / now_total * bar_w)
     shrunk = f"  (전체 {total}→{now_total}개)" if now_total < total else ""
@@ -161,14 +182,19 @@ def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
         moved = ""
         if start and abs(start.get("width", st["width"]) - st["width"]) > 1e-9:
             moved = f"  (폭 {start['width']:.2f} → {st['width']:.2f}%p)"
-        lines.append(f"  성과  최고 {span(top)}  {top['name'][:20]}{moved}")
+        # **선호가 걸리면 1위가 최고 금리가 아니다.** 그때 "최고" 라고 쓰면 화면이
+        # 거짓말한다 — 실측으로 우리은행 스코프에서 1위가 2.88% 인데 목록 3위가
+        # 3.26% 였다. `0019` 의 부산은행(사용자 입력 0개에서 4.80% 가 확정처럼
+        # 보였다)과 같은 모양이고, 말 한 단어가 그것을 만든다.
+        label = "1위" if prefs else "최고"
+        lines.append(f"  성과  {label} {span(top)}  {top['name'][:20]}{moved}")
         lines.append(f"        금리가 정해진 상품 {fixed}/{len(main)}개")
     return lines, st
 
 
 def status_bar(plan: dict, state: dict, scored: list[dict], total: int,
-               start: dict | None = None) -> dict:
-    lines, st = status_lines(plan, state, scored, total, start)
+               start: dict | None = None, prefs: dict | None = None) -> dict:
+    lines, st = status_lines(plan, state, scored, total, start, prefs)
     for line in lines:
         print(line)
     return st
@@ -218,17 +244,20 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
                         top: int | None, outside: dict | None = None,
                         total_all: int | None = None,
-                        start: dict | None = None) -> tuple[str, dict]:
+                        start: dict | None = None,
+                        prefs: dict | None = None) -> tuple[str, dict]:
     """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
 
     루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
     상태에 대해 읽는다. 사용자가 12번째 질문에서 그만두면 보는 것이 정확히 이 화면이다.
     """
-    main = ranked(scored)
+    main = ranked(scored, prefs)
     rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
     lines = [product_line(i, s) for i, s in enumerate(main[:top], 1)]
-    bar, st = status_lines(plan, state, scored, total, start)
+    bar, st = status_lines(plan, state, scored, total, start, prefs)
     lines += bar
+    # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
+    lines += P.lines(prefs or {}, sum(1 for s in main if s.get("_blocked")))
     if rest:
         tally = {t: sum(1 for x in rest if x["tier"] == t) for t in
                  {s["tier"] for s in rest}}
@@ -340,7 +369,8 @@ def apply_answer(state: dict, key: str, slot: dict, raw: str, kind: str) -> str:
 
 def run(stamp: str, group: str, term: int, top: int,
         scripted: list[str] | None, auto: str | None,
-        company: str | None = None, kinds: str | None = None) -> dict:
+        company: str | None = None, kinds: str | None = None,
+        prefs: dict | None = None) -> dict:
     tax = C.load_tax()
     rows_all, by_pair = AB.load(stamp, group, term)
     if not rows_all:
@@ -366,10 +396,14 @@ def run(stamp: str, group: str, term: int, top: int,
           f"언제든 '그만' 을 입력하면 멈춥니다.")
     print("'아니오'·'모르겠다' 로 답하면 그 조건에 딸린 문구 질문까지 같이 사라져 "
           "전체 질문 수가 줄어듭니다.")
-    print("\n■ 1단계 — 아무것도 묻지 않은 첫 화면 (조건을 다 채웠을 때 순)")
+    head = "선호 가중합 순" if prefs else "조건을 다 채웠을 때 순"
+    print(f"\n■ 1단계 — 아무것도 묻지 않은 첫 화면 ({head})")
     scored = AB.score_all(rows, by_pair, state, tax)
-    show_list(ranked(scored), top)
-    st = status_bar(plan, state, scored, total)
+    show_list(ranked(scored, prefs), top)
+    st = status_bar(plan, state, scored, total, None, prefs)
+    for line in P.lines(prefs or {},
+                        sum(1 for s in ranked(scored, prefs) if s.get("_blocked"))):
+        print(line)
     start = dict(st)                     # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`)
     out0 = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
@@ -408,11 +442,11 @@ def run(stamp: str, group: str, term: int, top: int,
                 break
         if quit_at:
             break
-        prev = [s["code"] for s in ranked(scored)]
+        prev = [s["code"] for s in ranked(scored, prefs)]
         scored = AB.score_all(rows, by_pair, state, tax)
         print(f"\n      → '{raw}' 로 받았습니다")
-        show_list(ranked(scored), 3, prev)
-        st = status_bar(plan, state, scored, total, start)
+        show_list(ranked(scored, prefs), 3, prev)
+        st = status_bar(plan, state, scored, total, start, prefs)
         steps.append({"step": step, "key": key, "kind": slot["kind"],
                       "unit": slot["unit"], "products": len(slot["codes"]),
                       "answer_kind": kind, "answer": raw,
@@ -424,7 +458,8 @@ def run(stamp: str, group: str, term: int, top: int,
     scored = AB.score_all(rows, by_pair, state, tax)
     outside = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     screen, st = render_final_screen(scored, plan, state, total, top,
-                                     outside, total_all if scoped else None, start)
+                                     outside, total_all if scoped else None, start,
+                                     prefs)
     print(screen)
 
     # ── 반증 조건 확인 (`decisions/0024`)
@@ -456,6 +491,7 @@ def run(stamp: str, group: str, term: int, top: int,
                                                        else "interactive"),
             "quit_at": quit_at, "quit_why": quit_why, "answered": len(steps), "unsure": n_unsure,
             "state": {k: v for k, v in state.items()}, "steps": steps,
+            "prefs": {k: v for k, v in (prefs or {}).items()},
             "final": st, "top1_start": start_top1}
 
 
@@ -463,10 +499,13 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
+    if "--survey" in argv:               # 설문 문항과 고정 표를 그대로 보여준다
+        print(P.survey())
+        return
     group, term, top, auto, answers = "bank", 12, 10, None, None
-    company, kinds = None, None
+    company, kinds, prefs_arg = None, None, None
     for flag in ("--group", "--term", "--top", "--auto", "--answers",
-                 "--company", "--kind"):
+                 "--company", "--kind", "--prefs"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -479,17 +518,20 @@ def main() -> None:
             answers = v if flag == "--answers" else answers
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
+            prefs_arg = v if flag == "--prefs" else prefs_arg
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/ask_loop.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--top 10] "
                          "[--company 우리,농협] [--kind 적금] "
-                         "[--auto 예|아니오|모름] [--answers 예,아니오,모름]")
+                         "[--auto 예|아니오|모름] [--answers 예,아니오,모름]\n"
+                         f"        [--prefs ...]  [--survey]\n        {P.USAGE}")
     if auto and auto not in ("예", "아니오", "모름"):
         raise SystemExit("--auto 는 예 · 아니오 · 모름 중 하나다")
     scripted = [a.strip() for a in answers.split(",")] if answers else None
     stamp = argv[0]
-    log = run(stamp, group, term, top, scripted, auto, company, kinds)
+    log = run(stamp, group, term, top, scripted, auto, company, kinds,
+              P.parse(prefs_arg))
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = C.OUT_DIR / f"ask_session_{group}_{stamp}_{term}m_{ts}.json"
     out.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
