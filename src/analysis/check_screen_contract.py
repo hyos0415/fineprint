@@ -30,6 +30,10 @@
     A13 화면에 **이 화면이 무엇인지 밝히는 고지**가 있어야 한다 (`0035` · A안) —
         공시 계산 결과이며 판매·중개하지 않는다는 사실
 
+    **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
+    다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
+    붙는다. 검사하는 것은 A1(범위) · A3(사유 문장) · A12 · A13 넷이다.
+
     **A11 이 #24 의 핵심 방어선이다.** 가중치가 판정에 새면 사용자의 취향이 "이 상품의
     금리가 얼마인가" 라는 사실을 바꾸는 것이고, 그 순간 `problem.md` §4 의
     "틀릴 수 없는 것 / 틀릴 수 있는 것" 구분이 무너진다.
@@ -86,6 +90,38 @@ def check_labels(screen: str) -> list[dict]:
     if L.NOTICE not in screen:
         bad.append({"assert": "A13", "product": "-",
                     "detail": "성격 고지가 화면에 없다"})
+    return bad
+
+
+def check_report(scored: list[dict], top: int, prefs: dict | None,
+                 tag: str) -> list[dict]:
+    """비교 리포트(F1)에 A1·A3·A12·A13 을 건다 (이슈 #33).
+
+    **왜 목록 화면과 따로 검사하나.** 렌더가 다르다 — 목록은 한 줄이고 리포트는
+    블록이다. `0035` 가 찾은 실패가 정확히 그 모양이었다(`calculate.py` 목록에는
+    세후 라벨이 있고 `ask_loop` 화면에는 없었다). 렌더가 하나 늘면 계약도 하나
+    늘려야 한다.
+
+    **전 세션에서 돌리지 않는다.** 리포트는 목록보다 렌더가 무겁고, 여기서 잡는
+    것은 상태에 따라 변하는 값이 아니라 **렌더 구조**다. 페르소나 끝 상태 세 개와
+    아무것도 안 답한 상태에서 본다.
+    """
+    import report as R
+    text = R.render_all(scored, top, prefs)
+    bad = [{**v, "detail": f"[리포트] {v['detail']}", "session": tag, "step": -1}
+           for v in check_labels(text)]
+    main = L.ranked(scored, prefs)[:top]
+    for s in main:
+        block = R.render(R.build(s, 1, prefs))
+        if s["net_hi"] - s["net_lo"] > EPS and "~" not in block:
+            bad.append({"assert": "A1", "product": s["name"], "session": tag,
+                        "step": -1, "detail": "[리포트] 폭이 남았는데 범위가 없다"})
+    for code in sorted({c for s in main for c in s.get("caveats", [])}
+                       & set(A3_CODES)):
+        if C.CAVEAT[code] not in text:
+            bad.append({"assert": "A3", "product": f"사유 {code}", "session": tag,
+                        "step": -1,
+                        "detail": f"[리포트] \"{C.CAVEAT[code][:36]}…\" 가 없다"})
     return bad
 
 
@@ -286,6 +322,17 @@ def run(stamp: str, group: str, term: int, seeds: int,
 
     t0 = time.monotonic()
     bad, n_states = [], 0
+    # 비교 리포트(F1) — 네 상태에서 렌더 구조를 본다 (이슈 #33)
+    for tag, st0 in (("리포트·미응답", {}),
+                     ("리포트·전부예", {k: True for k in plan}),
+                     ("리포트·전부아니오", {k: False for k in plan}),
+                     ("리포트·전부모름", {k: C.UNSURE for k in plan})):
+        scored0 = AB.score_all(rows, by_pair, st0, tax)
+        if prefs:
+            P.annotate(scored0, prefs)
+        rep_bad = check_report(scored0, 5, prefs, tag)
+        bad += rep_bad
+        print(f"  {tag:<16}위반 {len(rep_bad)}건")
     for persona in ("예", "아니오", "모름"):
         out = walk(rows, by_pair, plan, total, tax, persona=persona,
                    rows_all=rows_all, prefs=prefs)
