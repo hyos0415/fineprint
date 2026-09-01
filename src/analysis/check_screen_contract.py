@@ -34,6 +34,17 @@
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
     붙는다. 검사하는 것은 A1(범위) · A3(사유 문장) · A12 · A13 넷이다.
 
+검사는 두 겹이다 (F4-0 · 이슈 #36)
+    **모델 겹** `view.check_model(vm)` — 뷰 모델에 **사실이 담겼나**. 렌더러가
+        무엇이든 같다. 데이터가 아예 없으면 어떤 렌더러도 계약을 못 지킨다.
+        위반은 `detail` 에 `[모델]` 이 붙는다
+    **렌더 겹** 아래 문자열 검사들 — 그 사실을 **실제로 출력했나**. 렌더러마다 건다
+        (지금은 CLI 화면과 리포트 둘. F4-2 에서 웹이 셋째로 붙는다)
+
+    **두 겹이 잡는 것이 다르다.** 뷰 모델에 `net_lo`·`net_hi` 가 둘 다 있어도
+    렌더러가 하나만 출력하면 A1 위반이고 모델 겹은 그것을 못 잡는다. `0035` 가
+    찾은 실패가 정확히 그 모양이었다 — **데이터는 있고 한 화면에만 라벨이 없었다.**
+
     **A11 이 #24 의 핵심 방어선이다.** 가중치가 판정에 새면 사용자의 취향이 "이 상품의
     금리가 얼마인가" 라는 사실을 바꾸는 것이고, 그 순간 `problem.md` §4 의
     "틀릴 수 없는 것 / 틀릴 수 있는 것" 구분이 무너진다.
@@ -63,6 +74,7 @@ import ask_budget as AB  # noqa: E402
 import ask_loop as L  # noqa: E402
 import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
+import view as V  # noqa: E402
 
 SEEDS = 200          # `prereg-09` §4 에 못 박은 값. 결과를 보고 고치지 않는다
 EPS = 1e-6
@@ -136,7 +148,11 @@ def check_state(screen: str, scored: list[dict], tax: dict,
     for i, s in enumerate(main, 1):
         line = L.product_line(i, s)
         width = s["net_hi"] - s["net_lo"]
-        if width > EPS and "~" not in L.span(s):
+        # **렌더된 줄을 본다.** 여기가 `L.span(s)` 를 보고 있었다 — 그건 헬퍼가
+        # 제대로 동작하는지일 뿐이고, **화면이 그 값을 실제로 썼는지는 안 봤다.**
+        # F4-0 음성 검사에서 잡혔다(2026-09-01 · 이슈 #36): `product_line` 이 최대값
+        # 하나만 출력하게 바꿔도 A1 이 통과했다. 계약 검사가 계약을 안 보고 있었다
+        if width > EPS and "~" not in line:
             bad.append({"assert": "A1", "product": s["name"], "detail": line})
         if s["tier"] == "확정" and width > EPS:
             bad.append({"assert": "A2", "product": s["name"],
@@ -254,6 +270,10 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
                         "detail": f"스코프 밖 최고 {outside['net_hi']:.2f}% 가 화면에 없다"})
         tag = persona or f"seed{seed}"
         for v in check_state(screen, scored, tax, prefs):
+            bad.append({**v, "session": tag, "step": step})
+        # 모델 겹 — 화면 문자열이 아니라 **뷰 모델**을 본다 (F4-0 · 이슈 #36)
+        vm = V.build(scored, plan, state, total, None, outside, prefs=prefs)
+        for v in V.check_model(vm):
             bad.append({**v, "session": tag, "step": step})
         if prefs:                                                  # A10 · A11
             # `scored` 를 **정렬하지 않은 채로** 넘긴다 — `ranked()` 가 이미 같은
