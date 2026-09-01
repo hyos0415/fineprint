@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ask_budget as AB  # noqa: E402
+import view as V  # noqa: E402  — 뷰 모델. `view` 는 `ask_loop` 을 함수 안에서만 부른다
 import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
 
@@ -281,33 +282,6 @@ ASKABLE_CAVEATS = ("미응답",)      # `수치필요` 는 `prereg-10` 에서 �
 HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요")
 
 
-def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
-                 state: dict, tax: dict) -> dict | None:
-    """**스코프 밖 최고 금리** — 화면 계약 A7 (`decisions/0028` S4 · `prereg-11` §2).
-
-    좁히면 금리를 잃는다. 은행권 실측으로 기관별 격차 **중앙값 2.41%p**, 16곳 중
-    15곳이 1.0%p 초과다. 안 보여주면 `0017` 이 막은 실패("좋은 상품이 묻힌다")를
-    스코프에서 되살린다. 그래서 밖에 무엇이 있는지를 항상 같이 말한다.
-
-    비교는 **조건을 다 채웠을 때(hi)** 로 한다 — 밖의 상품은 질문을 안 했으므로
-    답을 받은 상태가 없다. 화면에도 "조건 다 채웠을 때" 라고 적어야 한다.
-    """
-    inside_keys = {C.row_key(r) for r in rows_in}     # 행 단위 (`prereg-13`)
-    outs = [r for r in rows_all if C.row_key(r) not in inside_keys]
-    if not outs:
-        return None
-    best_out = max(AB.score_all(outs, by_pair, state, tax),
-                   key=lambda s: s["net_hi"], default=None)
-    inside = AB.score_all(rows_in, by_pair, state, tax) if rows_in else []
-    best_in = max((s["net_hi"] for s in inside), default=0.0)
-    if best_out is None or best_out["net_hi"] <= best_in + 1e-9:
-        return None                      # 숨길 것이 없다 — 밖이 더 좋지 않다
-    return {"name": best_out["name"], "net_hi": best_out["net_hi"],
-            "gap": round(best_out["net_hi"] - best_in, 3),
-            "company": best_out.get("company") or "",
-            "channel": best_out.get("channel") or ""}
-
-
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
                         top: int | None, outside: dict | None = None,
                         total_all: int | None = None,
@@ -481,7 +455,7 @@ def run(stamp: str, group: str, term: int, top: int,
                         sum(1 for s in ranked(scored, prefs) if s.get("_blocked"))):
         print(line)
     start = dict(st)                     # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`)
-    out0 = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
+    out0 = V.outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
         print(f"\n  ⚠ 스코프 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
               f"({out0['company']} {out0['name'][:22]} · +{out0['gap']:.2f}%p · "
@@ -493,10 +467,11 @@ def run(stamp: str, group: str, term: int, top: int,
 
     quit_at, quit_why, tick = None, "", time.monotonic()
     for step in range(1, MAX_STEPS + 1):
-        ordered = [(k, s) for k, s in C.rank_questions(scored) if k not in state]
-        if not ordered:
+        # **뷰 모델과 같은 함수로 다음 질문을 고른다** (F4-1 · `0039` 반증 조건).
+        # 여기서 따로 골랐더니 웹이 붙는 순간 순서 규칙이 두 군데가 됐다
+        key, slot = V.next_question(scored, state)
+        if key is None:
             break
-        key, slot = ordered[0]
         head, lines = prompt_for(key, slot)
         print(f"\n  [{step}] {head}")
         print(f"      이 답 하나가 상품 {len(slot['products'])}개의 판정을 엽니다")
@@ -532,7 +507,7 @@ def run(stamp: str, group: str, term: int, top: int,
     print("\n" + "-" * 92)
     print("■ 3단계 — 결과")
     scored = AB.score_all(rows, by_pair, state, tax)
-    outside = outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
+    outside = V.outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     screen, st = render_final_screen(scored, plan, state, total, top,
                                      outside, total_all if scoped else None, start,
                                      prefs)
