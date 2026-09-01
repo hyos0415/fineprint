@@ -260,7 +260,7 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
     scoped = rows_all is not None and len(rows_all) > len(rows)
     for step in range(len(plan) * 3 + 5):        # 무한 루프 방어
         scored = AB.score_all(rows, by_pair, state, tax)
-        outside = (L.outside_best(rows_all, rows, by_pair, state, tax)
+        outside = (V.outside_best(rows_all, rows, by_pair, state, tax)
                    if scoped else None)
         screen, st = L.render_final_screen(scored, plan, state, total, None, outside,
                                            prefs=prefs)

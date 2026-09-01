@@ -38,6 +38,75 @@ import calculate as C
 EPS = 1e-6
 
 
+def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
+                 state: dict, tax: dict) -> dict | None:
+    """**스코프 밖 최고 금리** — 화면 계약 A7 (`decisions/0028` S4 · `prereg-11` §2).
+
+    **2026-09-01 에 `ask_loop`(렌더러)에서 여기로 옮겼다** (F4-1 · 이슈 #38).
+    이 함수는 그리는 것이 아니라 **사실을 만든다** — 서버도 CLI 도 같은 사실을
+    써야 하는데 렌더러에 있으면 서버가 CLI 모듈을 import 하게 된다.
+
+    좁히면 금리를 잃는다. 은행권 실측으로 기관별 격차 **중앙값 2.41%p**, 16곳 중
+    15곳이 1.0%p 초과다. 안 보여주면 `0017` 이 막은 실패("좋은 상품이 묻힌다")를
+    스코프에서 되살린다. 그래서 밖에 무엇이 있는지를 항상 같이 말한다.
+
+    비교는 **조건을 다 채웠을 때(hi)** 로 한다 — 밖의 상품은 질문을 안 했으므로
+    답을 받은 상태가 없다. 화면에도 "조건 다 채웠을 때" 라고 적어야 한다.
+    """
+    import ask_budget as AB
+
+    inside_keys = {C.row_key(r) for r in rows_in}     # 행 단위 (`prereg-13`)
+    outs = [r for r in rows_all if C.row_key(r) not in inside_keys]
+    if not outs:
+        return None
+    best_out = max(AB.score_all(outs, by_pair, state, tax),
+                   key=lambda s: s["net_hi"], default=None)
+    inside = AB.score_all(rows_in, by_pair, state, tax) if rows_in else []
+    best_in = max((s["net_hi"] for s in inside), default=0.0)
+    if best_out is None or best_out["net_hi"] <= best_in + 1e-9:
+        return None                      # 숨길 것이 없다 — 밖이 더 좋지 않다
+    return {"name": best_out["name"], "net_hi": best_out["net_hi"],
+            "gap": round(best_out["net_hi"] - best_in, 3),
+            "company": best_out.get("company") or "",
+            "channel": best_out.get("channel") or ""}
+
+
+def next_question(scored: list[dict], state: dict) -> tuple[str | None, dict | None]:
+    """다음에 물을 질문 하나. **순서 규칙은 `rank_questions` 가 정한다** (`0018`).
+
+    **CLI 루프와 뷰 모델이 같은 함수를 쓴다** (F4-1 · 이슈 #38). 옛 루프는 자기
+    자리에서 `rank_questions` 를 불러 첫 항목을 집었고, 뷰 모델에는 질문 **수**만
+    있었다. 웹이 "다음 질문이 무엇인가" 를 물으면 그 자리가 둘로 갈라진다 —
+    `0039` 반증 조건이 *"칸을 늘리되 CLI 렌더러도 그 칸을 쓰게 한다"* 로 미리
+    적어 둔 자리다.
+    """
+    for key, slot in C.rank_questions(scored):
+        if key not in state:
+            return key, slot
+    return None, None
+
+
+def question_card(key: str | None, slot: dict | None) -> dict | None:
+    """질문 하나를 화면이 쓸 모양으로. **JSON 으로 그대로 나갈 수 있어야 한다.**
+
+    `slot["products"]`·`needs`·`evidence` 는 `set` 이라 JSON 이 안 된다 — 여기서
+    정렬된 리스트와 개수로 바꾼다.
+
+    **공시 문구를 자르지 않는다** (`0027` · `prereg-10` §6) — 문구를 자르면 조건이
+    달라진다. 선택지도 셋뿐이다(`0027`).
+    """
+    if key is None or slot is None:
+        return None
+    return {
+        "key": key,
+        "유형": slot["kind"],
+        "단위": slot["unit"],
+        "문구": sorted(slot["evidence"]),
+        "여는_상품수": len(slot["products"]),
+        "선택지": ["예", "아니오", "모름"],
+    }
+
+
 def build(scored: list[dict], plan: dict, state: dict, total: int,
           top: int | None = None, outside: dict | None = None,
           total_all: int | None = None, start: dict | None = None,
@@ -82,7 +151,9 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
         "products": shown,                          # 복사하지 않는다 — 같은 객체다
         "메인밖": {"수": len(rest), "층별": tally},
         "questions": {"남은": st["left"], "답한": st["answered"],
-                      "지금_총": st["total_now"], "처음_총": total},
+                      "지금_총": st["total_now"], "처음_총": total,
+                      # 다음에 물을 질문 하나. 없으면 None (더 물을 게 없다)
+                      "현재": question_card(*next_question(scored, state))},
         "notices": {
             "사유": [(c, C.CAVEAT[c]) for c in codes],       # A3
             "스코프밖": outside,                              # A7
@@ -147,4 +218,18 @@ def check_model(vm: dict) -> list[dict]:
     q = vm["questions"]
     if q["답한"] + q["남은"] != q["지금_총"]:
         hit("A6", "-", f"답한 {q['답한']} + 남은 {q['남은']} != 총 {q['지금_총']}")
+
+    # 질문 칸 — 남은 질문이 있으면 **무엇을 물을지**가 담겨야 한다 (F4-1)
+    cur = q.get("현재")
+    if q["남은"] > 0 and cur is None:
+        hit("A6", "-", f"남은 질문이 {q['남은']}개인데 물을 질문이 담기지 않았다")
+    if q["남은"] == 0 and cur is not None:
+        hit("A6", "-", "남은 질문이 0인데 물을 질문이 담겼다")
+    if cur is not None:
+        # **공시 문구가 있어야 한다** — 사용자가 판단할 근거다 (`0027`).
+        # 문구가 없는 조건은 `조건불명` 으로 질문이 안 만들어지므로 여기 오면 결함이다
+        if not cur["문구"]:
+            hit("A3", cur["key"], "물을 질문에 공시 문구가 없다")
+        if cur["선택지"] != ["예", "아니오", "모름"]:
+            hit("A3", cur["key"], f"선택지가 셋이 아니다: {cur['선택지']}")
     return bad
