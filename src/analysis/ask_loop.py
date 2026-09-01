@@ -121,11 +121,17 @@ def screen_header(scored: list[dict]) -> list[str]:
     return [f"  {tax_label(scored)}", f"  {NOTICE}"]
 
 
+def span_of(lo: float, hi: float) -> str:
+    """값 두 개로 범위 문자열. **상태바는 상품 dict 가 아니라 사실만 보고 만든다**
+    (F4-0 · 이슈 #36) — 그래야 웹 렌더러도 같은 문자열을 만들 수 있다."""
+    if abs(hi - lo) < 1e-9:
+        return f"{lo:.2f}%"
+    return f"{lo:.2f}~{hi:.2f}%"
+
+
 def span(s: dict) -> str:
     """**범위는 범위로 보여준다** — `design.md` 화면 계약 1번. 같을 때만 숫자 하나다."""
-    if abs(s["net_hi"] - s["net_lo"]) < 1e-9:
-        return f"{s['net_lo']:.2f}%"
-    return f"{s['net_lo']:.2f}~{s['net_hi']:.2f}%"
+    return span_of(s["net_lo"], s["net_hi"])
 
 
 def ranked(scored: list[dict], prefs: dict | None = None) -> list[dict]:
@@ -183,10 +189,13 @@ def show_list(items: list[dict], top: int | None, prev: list[str] | None = None)
         print(line)
 
 
-def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
-                 start: dict | None = None,
-                 prefs: dict | None = None) -> tuple[list[str], dict]:
-    """상태바 — 진행 · 성과(내 금리 범위) · 확정 수 (`0024` P4 → `0029` 개정).
+def status_facts(plan: dict, state: dict, scored: list[dict], total: int,
+                 start: dict | None = None, prefs: dict | None = None) -> dict:
+    """상태바가 말하는 **사실**만 만든다 — 문자열을 만들지 않는다 (F4-0 · 이슈 #36).
+
+    렌더와 사실을 가르는 이유는 웹이다. 화면 계약 A4·A6 은 이미 이 dict 를 읽고
+    있었는데(`st`), 나머지 계약은 렌더된 문자열을 grep 하고 있었다. 웹 렌더러가
+    생기면 그쪽이 무의미해지므로 **사실을 먼저 꺼낸다**(`ui-plan.md` F4-0).
 
     **"답한 질문" 은 실제로 답한 수다.** 옛 화면은 `전체 - 남은` 을 답한 수로 표시해
     11개 답한 사람에게 "22개" 라고 말했다 — 거짓이었다(`calculate.questions_answered`).
@@ -198,8 +207,7 @@ def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
     확정 수는 후보 집합 크기에 종속이고, 범위 폭은 그렇지 않다.
 
     **확정 수를 버리지는 않는다** — "모르겠다" 와 "아니오" 를 가르는 유일한 숫자라
-    부 지표로 남긴다. **1위 상품명을 같이 적는다** — 답하는 도중 1위가 바뀌므로
-    (`0017`), 안 적으면 다른 상품끼리의 비교가 같은 상품이 좁아진 것처럼 읽힌다.
+    부 지표로 남긴다.
     """
     left = C.questions_left(plan, state)
     answered = C.questions_answered(plan, state)
@@ -209,29 +217,45 @@ def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
     # **1위는 화면 목록의 1위여야 한다** — 선호가 걸리면 목록 순서가 바뀌므로 여기도
     # 같은 정렬을 써야 한다. 안 그러면 화면 계약 A8(성과 줄 = 1위 상품)이 깨진다
     top = ranked(scored, prefs)[0] if main else None
+    return {"left": left, "answered": answered, "total_now": now_total,
+            "done": answered, "fixed": fixed, "main": len(main),
+            "top1": top["net_hi"] if top else 0.0,
+            "top1_lo": top["net_lo"] if top else 0.0,
+            "top1_name": top["name"] if top else "",
+            "width": round(top["net_hi"] - top["net_lo"], 4) if top else 0.0,
+            # 성과 줄의 낱말. **선호가 걸리면 1위가 최고 금리가 아니다** (`0030`)
+            "성과_라벨": "1위" if prefs else "최고",
+            "폭_시작": (start or {}).get("width"),
+            "처음_총": total}
+
+
+def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
+                 start: dict | None = None,
+                 prefs: dict | None = None) -> tuple[list[str], dict]:
+    """상태바 — 진행 · 성과(내 금리 범위) · 확정 수 (`0024` P4 → `0029` 개정).
+
+    **사실은 `status_facts()` 가 만들고 여기서는 그리기만 한다** (F4-0). 그래서 이
+    함수는 `st` 밖의 값을 읽지 않는다 — 웹 렌더러가 같은 `st` 로 같은 말을 할 수 있다.
+    """
+    st = status_facts(plan, state, scored, total, start, prefs)
     bar_w = 32
-    filled = 0 if not now_total else round(answered / now_total * bar_w)
-    shrunk = f"  (전체 {total}→{now_total}개)" if now_total < total else ""
+    filled = 0 if not st["total_now"] else round(st["answered"] / st["total_now"] * bar_w)
+    shrunk = (f"  (전체 {total}→{st['total_now']}개)"
+              if st["total_now"] < total else "")
     lines = [f"\n  진행  [{'#' * filled}{'.' * (bar_w - filled)}]  "
-             f"답한 질문 {answered}/{now_total}개 · 남은 질문 {left}개{shrunk}"]
-    st = {"left": left, "answered": answered, "total_now": now_total,
-          "done": answered, "fixed": fixed, "main": len(main),
-          "top1": top["net_hi"] if top else 0.0,
-          "top1_lo": top["net_lo"] if top else 0.0,
-          "top1_name": top["name"] if top else "",
-          "width": round(top["net_hi"] - top["net_lo"], 4) if top else 0.0}
-    if top:
-        # 성과 — 사용자가 실제로 얻는 것. A8 이 이 줄과 상품 목록의 일치를 검사한다
+             f"답한 질문 {st['answered']}/{st['total_now']}개 · "
+             f"남은 질문 {st['left']}개{shrunk}"]
+    if st["top1_name"]:
+        # 성과 — 사용자가 실제로 얻는 것. A8 이 이 줄과 상품 목록의 일치를 검사한다.
+        # **말 한 단어가 거짓말을 만든다** — 실측으로 우리은행 스코프에서 1위가 2.88%
+        # 인데 목록 3위가 3.26% 였다(`0030`). 그래서 라벨도 사실로 취급해 `st` 에 둔다
         moved = ""
-        if start and abs(start.get("width", st["width"]) - st["width"]) > 1e-9:
-            moved = f"  (폭 {start['width']:.2f} → {st['width']:.2f}%p)"
-        # **선호가 걸리면 1위가 최고 금리가 아니다.** 그때 "최고" 라고 쓰면 화면이
-        # 거짓말한다 — 실측으로 우리은행 스코프에서 1위가 2.88% 인데 목록 3위가
-        # 3.26% 였다. `0019` 의 부산은행(사용자 입력 0개에서 4.80% 가 확정처럼
-        # 보였다)과 같은 모양이고, 말 한 단어가 그것을 만든다.
-        label = "1위" if prefs else "최고"
-        lines.append(f"  성과  {label} {span(top)}  {top['name'][:20]}{moved}")
-        lines.append(f"        금리가 정해진 상품 {fixed}/{len(main)}개")
+        if st["폭_시작"] is not None and abs(st["폭_시작"] - st["width"]) > 1e-9:
+            moved = f"  (폭 {st['폭_시작']:.2f} → {st['width']:.2f}%p)"
+        span_txt = span_of(st["top1_lo"], st["top1"])
+        lines.append(f"  성과  {st['성과_라벨']} {span_txt}  "
+                     f"{st['top1_name'][:20]}{moved}")
+        lines.append(f"        금리가 정해진 상품 {st['fixed']}/{st['main']}개")
     return lines, st
 
 
@@ -293,28 +317,35 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
 
     루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
     상태에 대해 읽는다. 사용자가 12번째 질문에서 그만두면 보는 것이 정확히 이 화면이다.
+
+    **뷰 모델을 거쳐 그린다** (F4-0 · 이슈 #36). 이 함수가 직접 `scored` 를 뒤지지
+    않고 `view.build()` 가 모은 것만 읽는다 — 웹 렌더러가 **같은 뷰 모델**을 받으므로,
+    여기서 그리는 것과 웹에서 그리는 것이 같은 사실 위에 선다. 뷰 모델이 칸을 빠뜨리면
+    `view.check_model()` 이, 그려야 할 것을 안 그리면 화면 계약 검사가 잡는다.
     """
-    main = ranked(scored, prefs)
-    rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
+    import view as V
+
+    vm = V.build(scored, plan, state, total, top, outside, total_all, start, prefs)
+    st = vm["progress"]
     # A12·A13 — 세후 라벨과 성격 고지는 **금리보다 위**에 둔다 (`0035`)
-    lines = screen_header(scored)
-    lines += [product_line(i, s) for i, s in enumerate(main[:top], 1)]
-    bar, st = status_lines(plan, state, scored, total, start, prefs)
-    lines += bar
+    lines = [f"  {vm['meta']['세후_라벨']}", f"  {vm['meta']['고지']}"]
+    lines += [product_line(i, s) for i, s in enumerate(vm["products"], 1)]
+    lines += status_lines(plan, state, scored, total, start, prefs)[0]
     # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
-    lines += P.lines(prefs or {}, sum(1 for s in main if s.get("_blocked")))
-    if rest:
-        tally = {t: sum(1 for x in rest if x["tier"] == t) for t in
-                 {s["tier"] for s in rest}}
-        lines.append(f"\n  메인 밖 {len(rest)}개 — "
+    lines += P.lines(prefs or {}, vm["prefs"]["막힌_상품"])
+    if vm["메인밖"]["수"]:
+        tally = vm["메인밖"]["층별"]
+        lines.append(f"\n  메인 밖 {vm['메인밖']['수']}개 — "
                      + " · ".join(f"{t} {n}" for t, n in sorted(tally.items())))
-    if outside:                                    # A7 — 좁히는 대가를 숨기지 않는다
-        wider = "" if total_all is None else f" · 넓히면 질문이 {total_all}개로 늘어납니다"
-        lines.append(f"\n  ⚠ 스코프 밖에 {outside['net_hi']:.2f}% 가 있습니다 "
-                     f"({outside['company']} {outside['name'][:22]} · "
-                     f"+{outside['gap']:.2f}%p · [{outside['channel']}] · "
+    out = vm["notices"]["스코프밖"]
+    if out:                                        # A7 — 좁히는 대가를 숨기지 않는다
+        wider = ("" if vm["notices"]["넓히면_질문"] is None
+                 else f" · 넓히면 질문이 {vm['notices']['넓히면_질문']}개로 늘어납니다")
+        lines.append(f"\n  ⚠ 스코프 밖에 {out['net_hi']:.2f}% 가 있습니다 "
+                     f"({out['company']} {out['name'][:22]} · "
+                     f"+{out['gap']:.2f}%p · [{out['channel']}] · "
                      f"조건 다 채웠을 때){wider}")
-    shown = {c for s in main for c in s.get("caveats", [])}
+    shown = {c for c, _text in vm["notices"]["사유"]}
     for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
                           ("되물어도 못 채우는 사유", HARD_CAVEATS)):
         hit = [c for c in codes if c in shown]
