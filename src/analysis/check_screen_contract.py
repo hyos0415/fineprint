@@ -39,7 +39,8 @@
         무엇이든 같다. 데이터가 아예 없으면 어떤 렌더러도 계약을 못 지킨다.
         위반은 `detail` 에 `[모델]` 이 붙는다
     **렌더 겹** 아래 문자열 검사들 — 그 사실을 **실제로 출력했나**. 렌더러마다 건다
-        (지금은 CLI 화면과 리포트 둘. F4-2 에서 웹이 셋째로 붙는다)
+        **렌더러가 셋이다** — CLI 최종 화면 · 비교 리포트 · **웹 HTML**(F4-3).
+        위반은 `detail` 에 `[리포트]`·`[웹]` 이 붙는다
 
     **두 겹이 잡는 것이 다르다.** 뷰 모델에 `net_lo`·`net_hi` 가 둘 다 있어도
     렌더러가 하나만 출력하면 A1 위반이고 모델 겹은 그것을 못 잡는다. `0035` 가
@@ -102,6 +103,67 @@ def check_labels(screen: str) -> list[dict]:
     if L.NOTICE not in screen:
         bad.append({"assert": "A13", "product": "-",
                     "detail": "성격 고지가 화면에 없다"})
+    return bad
+
+
+def check_web(scored: list[dict], plan: dict, state: dict, total: int,
+              prefs: dict | None, tag: str,
+              outside: dict | None = None,
+              order: str = "hi") -> list[dict]:
+    """**웹 HTML** 에 렌더 겹을 건다 (F4-3 · 이슈 #42).
+
+    렌더러가 하나 늘면 계약도 하나 늘린다(`0039` D3). 뷰 모델에 사실이 담겨 있어도
+    **렌더러가 안 그리면 위반**이고, 그건 모델 겹이 못 잡는다.
+
+    F4-2 가 HTML 만드는 자리를 **함수 하나**로 뒀기 때문에(`0043` D2) 여기서
+    그것을 부르면 된다 — 브라우저도 헤드리스도 필요 없다. **JS 없이 도는 화면**이라
+    서버가 낸 HTML 이 사용자가 보는 것과 같다.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "web"))
+    import render as RENDER
+    import report as R
+
+    vm = V.build(scored, plan, state, total, 10, outside, None, None, prefs, order)
+    reports = [R.build(s, i, prefs) for i, s in enumerate(vm["products"], 1)]
+    form = {"snapshot": "-", "group": "-", "term": 12, "order": order,
+            "state_json": "{}"}
+    html = RENDER.render_screen(vm, form, reports)
+
+    def hit(code: str, product: str, detail: str) -> list[dict]:
+        return [{"assert": code, "product": product, "session": tag, "step": -1,
+                 "detail": f"[웹] {detail}"}]
+
+    bad: list[dict] = []
+    # A12·A13 — 세후 라벨과 고지. 문구는 상수에서 온다(사본을 만들지 않는다)
+    if "%" in html and "세후" not in html:
+        bad += hit("A12", "-", "금리가 있는 화면에 `세후` 라벨이 없다")
+    if L.NOTICE not in html:
+        bad += hit("A13", "-", "성격 고지가 화면에 없다")
+    # A1 — 폭이 남은 상품은 범위로 그려야 한다
+    for s in vm["products"]:
+        if s["net_hi"] - s["net_lo"] > EPS and V.display(s)["범위"] not in html:
+            bad += hit("A1", s["name"], f"범위 {V.display(s)['범위']} 가 화면에 없다")
+    # A3 — 사유는 **문장**으로 나가야 한다
+    for code, text in vm["notices"]["사유"]:
+        if text not in html:
+            bad += hit("A3", f"사유 {code}", f'"{text[:36]}…" 가 없다')
+    # A7 — 스코프 밖 최고 금리
+    if outside and f"{outside['net_hi']:.2f}" not in html:
+        bad += hit("A7", outside["name"], "스코프 밖 최고 금리가 화면에 없다")
+    # A8 — 성과 줄이 목록 1위와 같아야 한다. 낱말도 사실이어야 한다(`0030`)
+    if vm["headline"]["상품"]:
+        d = V.display(vm["headline"]["상품"])
+        want = f"{vm['headline']['라벨']} {d['범위']}"
+        if want not in html:
+            bad += hit("A8", d["이름"], f"성과 줄 '{want}' 가 화면에 없다")
+    # A10 — 옮긴 가중치가 보이고 고치는 방법이 있어야 한다
+    if prefs:
+        for key, answer in (prefs.get("_answers") or {}).items():
+            if answer not in html:
+                bad += hit("A10", key, f"가중치 답 '{answer}' 가 화면에 없다")
+        if "처음으로" not in html:
+            bad += hit("A10", "-", "선호를 고치는 방법이 화면에 없다")
     return bad
 
 
@@ -251,7 +313,8 @@ def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> t
 def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
          persona: str | None = None, seed: int | None = None,
          rows_all: list[dict] | None = None,
-         prefs: dict | None = None) -> list[dict]:
+         prefs: dict | None = None,
+         order: str = "hi") -> list[dict]:
     """세션 하나를 끝까지 걸으며 각 중간 상태를 검사한다. 위반 목록을 낸다."""
     rng = random.Random(seed) if seed is not None else None
     state: dict = {}
@@ -263,7 +326,7 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         outside = (V.outside_best(rows_all, rows, by_pair, state, tax)
                    if scoped else None)
         screen, st = L.render_final_screen(scored, plan, state, total, None, outside,
-                                           prefs=prefs)
+                                           prefs=prefs, order=order)
         if outside and f"{outside['net_hi']:.2f}%" not in screen:      # A7
             bad.append({"assert": "A7", "product": outside["name"], "session": "-",
                         "step": step,
@@ -272,7 +335,8 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         for v in check_state(screen, scored, tax, prefs):
             bad.append({**v, "session": tag, "step": step})
         # 모델 겹 — 화면 문자열이 아니라 **뷰 모델**을 본다 (F4-0 · 이슈 #36)
-        vm = V.build(scored, plan, state, total, None, outside, prefs=prefs)
+        vm = V.build(scored, plan, state, total, None, outside, prefs=prefs,
+                     order=order)
         for v in V.check_model(vm):
             bad.append({**v, "session": tag, "step": step})
         if prefs:                                                  # A10 · A11
@@ -284,7 +348,7 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         if prev_left is not None and st["left"] > prev_left:      # A4
             bad.append({"assert": "A4", "product": "-", "session": tag, "step": step,
                         "detail": f"남은 질문 {prev_left} → {st['left']} 로 늘었다"})
-        main_now = L.ranked(scored, prefs)                        # A8
+        main_now = L.ranked(scored, prefs, order)                 # A8
         if main_now:
             want = L.span(main_now[0])
             if want not in screen or main_now[0]["name"][:20] not in screen:
@@ -302,6 +366,17 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
                             "detail": f"성과 줄이 '최고' 라고 쓰는데 1위 "
                                       f"{main_now[0]['net_hi']:.2f}% 위에 "
                                       f"{best:.2f}% 가 있다"})
+            # **확정된 값 순 화면도 같은 검사를 받는다** (`prereg-14` §8 A안) —
+            # 라벨만 바꾸고 정렬이 안 따라가면 여기서 걸린다
+            best_lo = max(s["net_lo"] for s in main_now)
+            if (f"성과  확실히 받는 것 중 최고 {want}" in screen
+                    and main_now[0]["net_lo"] < best_lo - EPS):
+                bad.append({"assert": "A8", "product": main_now[0]["name"],
+                            "session": tag, "step": step,
+                            "detail": f"성과 줄이 '확실히 받는 것 중 최고' 라고 "
+                                      f"쓰는데 1위 확정 "
+                                      f"{main_now[0]['net_lo']:.2f}% 위에 "
+                                      f"{best_lo:.2f}% 가 있다"})
         if st["answered"] != step:                                # A6
             bad.append({"assert": "A6", "product": "-", "session": tag, "step": step,
                         "detail": f"화면의 '답한 질문' {st['answered']} ≠ 실제 답한 수 {step}"})
@@ -320,7 +395,7 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
 
 def run(stamp: str, group: str, term: int, seeds: int,
         company: str | None = None, kinds: str | None = None,
-        prefs: dict | None = None) -> dict:
+        prefs: dict | None = None, order: str = "hi") -> dict:
     tax = C.load_tax()
     rows_all, by_pair = AB.load(stamp, group, term)
     if not rows_all:
@@ -338,6 +413,9 @@ def run(stamp: str, group: str, term: int, seeds: int,
               f"{len(rows)}개. A7 도 검사한다")
     if prefs:
         print(f"선호 {prefs.get('_answers')} — A10·A11 도 검사한다")
+    print(f"정렬 {order} — "
+          f"{'다 채웠을 때 순' if order == 'hi' else '확정된 값 순'}"
+          f"  (`0017` · `prereg-14` §8). 두 정렬을 다 돌아야 한다")
     print("검사 대상 화면은 ask_loop.render_final_screen() — 중단하면 보는 그 화면이다\n")
 
     t0 = time.monotonic()
@@ -351,17 +429,19 @@ def run(stamp: str, group: str, term: int, seeds: int,
         if prefs:
             P.annotate(scored0, prefs)
         rep_bad = check_report(scored0, 5, prefs, tag)
-        bad += rep_bad
-        print(f"  {tag:<16}위반 {len(rep_bad)}건")
+        web_bad = check_web(scored0, plan, st0, total, prefs,
+                            tag.replace("리포트", "웹"), order=order)
+        bad += rep_bad + web_bad
+        print(f"  {tag:<16}리포트 {len(rep_bad)}건 · 웹 {len(web_bad)}건")
     for persona in ("예", "아니오", "모름"):
         out = walk(rows, by_pair, plan, total, tax, persona=persona,
-                   rows_all=rows_all, prefs=prefs)
+                   rows_all=rows_all, prefs=prefs, order=order)
         n_states += max(s["step"] for s in out) + 1 if out else total + 1
         bad += out
         print(f"  페르소나 {persona:<4} 위반 {len(out)}건")
     for seed in range(seeds):
         bad += walk(rows, by_pair, plan, total, tax, seed=seed,
-                    rows_all=rows_all, prefs=prefs)
+                    rows_all=rows_all, prefs=prefs, order=order)
         if (seed + 1) % 50 == 0:
             print(f"  시드 {seed + 1:>3}/{seeds} 까지 · 누적 위반 {len(bad)}건 "
                   f"· {time.monotonic() - t0:.0f}초")
@@ -399,6 +479,7 @@ def run(stamp: str, group: str, term: int, seeds: int,
         print(f"  검사기 자체 오류 {len(codes['검사기'])}건 — 답을 못 넣은 자리다")
     print(f"\n  걸린 시간 {time.monotonic() - t0:.0f}초")
     return {"snapshot": stamp, "group": group, "term": term, "seeds": seeds,
+            "order": order,
             "questions_total": total, "products": len(rows),
             "violations": bad,
             "summary": {k: len(v) for k, v in sorted(codes.items())}}
@@ -410,7 +491,9 @@ def main() -> None:
     argv = sys.argv[1:]
     group, term, seeds = "bank", 12, SEEDS
     company, kinds, prefs_arg = None, None, None
-    for flag in ("--group", "--term", "--seeds", "--company", "--kind", "--prefs"):
+    orders = ["hi", "lo"]          # 기본은 **둘 다** — 새 경로를 검사 밖에 두지 않는다
+    for flag in ("--group", "--term", "--seeds", "--company", "--kind", "--prefs",
+                 "--order"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -422,17 +505,26 @@ def main() -> None:
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
             prefs_arg = v if flag == "--prefs" else prefs_arg
+            orders = [v] if flag == "--order" else orders
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/check_screen_contract.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--seeds 200] "
-                         "[--company 우리] [--kind 적금] [--prefs 확실성=많이]")
+                         "[--company 우리] [--kind 적금] [--prefs 확실성=많이] "
+                         "[--order hi|lo · 안 주면 둘 다]")
+    for o in orders:
+        if o not in ("hi", "lo"):
+            raise SystemExit("--order 는 hi 또는 lo 다")
     prefs = P.parse(prefs_arg)
-    report = run(argv[0], group, term, seeds, company, kinds, prefs)
-    tag = "_prefs" if prefs else ""
-    out = C.OUT_DIR / f"screen_contract_{group}_{argv[0]}_{term}m{tag}.json"
-    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"→ {out.relative_to(C.REPO_ROOT)} (git 제외)")
+    # **두 정렬을 다 돈다** — `prereg-14` §8 로 정렬이 사용자에게 노출됐다.
+    # 한쪽만 검사하면 노출한 쪽이 검사 밖에 남는다
+    for o in orders:
+        report = run(argv[0], group, term, seeds, company, kinds, prefs, o)
+        tag = ("_prefs" if prefs else "") + ("" if o == "hi" else "_lo")
+        out = C.OUT_DIR / f"screen_contract_{group}_{argv[0]}_{term}m{tag}.json"
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        print(f"→ {out.relative_to(C.REPO_ROOT)} (git 제외)")
 
 
 if __name__ == "__main__":

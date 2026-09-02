@@ -27,6 +27,21 @@
 </p>
 {% endif %}
 
+{# 지금 무슨 순서인지 **말하고**, 한 번에 바꾼다 (`prereg-14` §8 A안).
+   조건을 못 채우는 사용자는 최대순 맨 위에서 자기가 받을 상품을 못 본다. #}
+{% set 정렬 = vm['meta']['정렬'] %}
+<form method="post" action="/screen" class="sortbar">
+  {% with order_value = ('lo' if 정렬 == 'hi' else 'hi') %}
+  {% include '_carry.html' %}
+  {% endwith %}
+  <span class="notice">지금 순서 —
+    {{ '조건을 다 채웠을 때 받을 수 있는 금리 순' if 정렬 == 'hi' else '지금 확실히 받는 금리 순' }}
+  </span>
+  <button type="submit">
+    {{ '지금 확실히 받는 금리 순으로 보기' if 정렬 == 'hi' else '조건을 다 채웠을 때 금리 순으로 보기' }}
+  </button>
+</form>
+
 {# 질문 하나 — 공시 문구를 **자르지 않는다** (`0027` · `prereg-10` §6) #}
 {% if q['현재'] %}
 {% set cur = q['현재'] %}
@@ -36,15 +51,15 @@
   {# 문구를 **자르지 않는다** (`0027` · `prereg-10` §6). 다만 한 유형에 문구가 20개
      넘게 붙는 경우가 있어(자동이체 21개) 앞의 셋만 펼치고 나머지는 접는다.
      **몇 개를 먼저 보여줄지는 배치 결정이다** — 내용을 빼거나 자르는 것이 아니다. #}
-  {% for ev in cur['문구'][:3] %}
-  <blockquote>{{ ev }}</blockquote>
+  {% for f in cur['문구'][:3] %}
+  <blockquote>{% if f['기관'] %}<b>{{ f['기관'] }}</b> — {% endif %}{{ f['문구'] }}</blockquote>
   {% endfor %}
   {% if cur['문구']|length > 3 %}
   <details>
     <summary class="notice">공시 문구 {{ cur['문구']|length - 3 }}개 더 보기 —
-      상품마다 문구가 다릅니다</summary>
-    {% for ev in cur['문구'][3:] %}
-    <blockquote>{{ ev }}</blockquote>
+      <b>기관마다 문구가 다릅니다</b></summary>
+    {% for f in cur['문구'][3:] %}
+    <blockquote>{% if f['기관'] %}<b>{{ f['기관'] }}</b> — {% endif %}{{ f['문구'] }}</blockquote>
     {% endfor %}
   </details>
   {% endif %}

@@ -29,6 +29,11 @@
   button { font:inherit; padding:8px 18px; border:1px solid #333; border-radius:6px;
            background:#fff; cursor:pointer; }
   button.primary { background:#1a1a1a; color:#fff; }
+  /* 정렬 전환 — 지금 무슨 순서인지 말하고 한 번에 바꾼다 (`prereg-14` §8) */
+  .sortbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+             margin:8px 0 16px; padding:8px 12px; border:1px solid var(--line);
+             border-radius:6px; }
+  .sortbar button { padding:5px 12px; font-size:13px; }
   label { display:block; margin:10px 0 2px; font-size:13px; color:var(--dim); }
   input[type=text], input[type=number], select { font:inherit; padding:6px 8px;
            border:1px solid var(--line); border-radius:6px; min-width:220px; }

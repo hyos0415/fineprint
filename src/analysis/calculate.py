@@ -203,6 +203,33 @@ def parse_threshold(item: dict) -> tuple[str, float, str] | None:
 CLAUSE_HASH_BYTES = 4        # 8자 16진수. 실측 문구 종수는 권역당 100 미만이다
 
 
+def is_state_key(key: str) -> bool:
+    """이것이 **유효한 사용자 상태 키**인가 — 한 곳에서 판정한다.
+
+    모양이 셋이다.
+    ```
+    카드실적                 조건 유형 (`CONDITION_TYPES`)
+    카드실적_금액 · _횟수      수치 후속 (B안 · 임계 비교)
+    카드실적#a3f1c2d9        **문구 단위**  ← `clause_key()` 가 만든다 (`0027`·`prereg-10`)
+    ```
+
+    **왜 함수로 뺐나** (2026-09-02 · 사람 완주 2런). 이 판정이 두 군데 있었다 —
+    CLI 의 `--state` 파싱과 웹 서버의 요청 검증. CLI 는 문구 단위 키를 `--state` 로
+    받지 않으므로(대화 루프가 상태에 직접 넣는다) 셋째 모양을 몰라도 됐는데,
+    **웹은 그 키를 요청으로 받는다.** 그래서 복사된 검증이 유효한 답을 거부했다 —
+    사람이 질문에 답하다가 `모르는 조건 유형: ['목표달성_납입실적#4676c2ed']` 로 막혔다.
+
+    `0039` 가 정한 것과 같은 자리다 — **한쪽만 쓰는 규칙을 만들지 않는다.**
+    """
+    if key in CONDITION_TYPES:
+        return True
+    base, sep, _hash = key.partition("#")
+    if sep:                                   # 문구 단위 — 앞부분이 조건 유형이어야 한다
+        return base in CONDITION_TYPES
+    head, _, tail = key.rpartition("_")       # 수치 후속
+    return tail in ("금액", "횟수") and head in CONDITION_TYPES
+
+
 def clause_key(item: dict) -> str:
     """`카드실적#a3f1c2d9` — 조건 유형 + 근거 문구 해시."""
     ev = re.sub(r"\s+", " ", (item.get("evidence") or "")).strip()
@@ -597,12 +624,29 @@ def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
         for q in s.get("questions", []):
             slot = asks.setdefault(q["key"], {"unit": q["unit"], "products": set(),
                                               "needs": set(), "kind": q["kind"],
-                                              "evidence": set()})
+                                              "evidence": set(), "출처": {}})
             slot["products"].add(product_key(s))
             if q["need"] is not None:
                 slot["needs"].add(q["need"])
             if q["evidence"]:
                 slot["evidence"].add(q["evidence"])   # 자르지 않는다 (`prereg-10` §6)
+                # **문구가 어느 기관 것인지 같이 담는다** (2026-09-02 · 사람 완주 1런).
+                #
+                # 유형 질문은 문구를 **여러 기관에서 모아 온다** — 실측으로 유형 16개
+                # 중 15개가 그렇고, `첫거래_신규고객` 은 기관 10곳에서 온다. 그런데
+                # 문구의 8.6%가 "당행/본행/자행" 을 쓴다. 기관을 안 붙이면
+                # **가리키는 대상이 사라져서 사용자가 답을 고를 수 없다.**
+                #
+                # 관측된 그대로 — "당행 원화 정기예금 보유이력이 없는 경우 0.50%" 를
+                # 보고 *"당행이 어디인지 모르겠다"*, "③탑스, 주거래 고객" 을 보고
+                # *"탑스가 무슨 말인지 모르겠다"* 였다. `0027` 이 문구를 **자르지**
+                # 않게 했지만 **떼어내는** 것은 막지 못했다.
+                #
+                # 데이터에는 있었다 — 문구는 상품 행에서 왔고 그 행에 기관이 있다.
+                # `slot["evidence"]` 는 그대로 둔다(문구 단위 상태 키가 문구
+                # 문자열에서 나오므로 건드리면 답·세션·측정이 흔들린다).
+                slot["출처"].setdefault(q["evidence"], set()).add(
+                    s.get("company") or "")
     return sorted(asks.items(), key=lambda kv: (-len(kv[1]["products"]), kv[0]))
 
 
@@ -984,9 +1028,7 @@ def main() -> None:
     #   유형_금액=50만원    → 평잔 50만원        (만원·억원 단위를 그대로 쓸 수 있다)
     picked = [s.strip() for s in state_arg.split(",") if s.strip()]
     unknown_names = [q.partition("=")[0].strip() for q in picked]
-    unknown_names = [q for q in unknown_names if q not in CONDITION_TYPES
-                     and not (q.rpartition("_")[2] in ("금액", "횟수")
-                              and q.rpartition("_")[0] in CONDITION_TYPES)]
+    unknown_names = [q for q in unknown_names if not is_state_key(q)]
     if unknown_names:
         raise SystemExit(f"모르는 조건 유형: {unknown_names}\n가능한 값: {CONDITION_TYPES}")
     state = {}
@@ -1066,14 +1108,11 @@ def main() -> None:
     # 조정이 전부 0 이라 아래 `hi` 순과 소수점까지 같다 — 기본값을 우리가 정하지 않는
     # 자리다(`0024` P2). `prefs` 는 **여기서만** import 한다. 모듈 수준에서 하면
     # 순환이고, 무엇보다 `evaluate()` 가 선호를 몰라야 한다(화면 계약 A11).
+    import prefs as P
     if prefs:
-        import prefs as P
         P.annotate(scored, prefs)
-        scored.sort(key=P.sort_key)
-    elif order == "hi":
-        scored.sort(key=lambda x: (-x["net_hi"], -x["net_lo"], x["name"]))
-    else:
-        scored.sort(key=lambda x: (-x["net_lo"], -x["net_hi"], x["name"]))
+    # 정렬 규칙은 `prefs.sorter()` **한 곳**에 있다 — CLI·대화 루프·웹이 같은 것을 쓴다
+    scored.sort(key=P.sorter(order, prefs))
     main = [s for s in scored if s["tier"] in MAIN_TIERS]
     rest = [s for s in scored if s["tier"] not in MAIN_TIERS]
 
@@ -1179,8 +1218,13 @@ def main() -> None:
             else:
                 tail = "예 / 아니오 / 모르겠다"
             print(f"    {key:<30}상품 {len(slot['products']):>3}개   {tail}")
+            # 기관을 같이 적는다 — "당행" 이 가리킬 대상이 있어야 사람이 읽을 수 있다
+            # (2026-09-02 · 사람 완주 1런에서 나온 것)
             for ev in sorted(slot["evidence"])[:2]:
-                print(f"        공시 문구  \"{ev}\"")
+                orgs = " · ".join(sorted(o for o in (slot.get("출처") or {})
+                                         .get(ev, set()) if o))
+                head = f"{orgs} — " if orgs else ""
+                print(f"        공시 문구  {head}\"{ev}\"")
         if len(ordered) > ASK_BUDGET:
             print(f"    --- 여기까지가 평가 예산 {ASK_BUDGET}개 ---")
             print(f"    ... 그리고 {len(ordered) - ASK_BUDGET}개 더 "

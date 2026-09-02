@@ -135,8 +135,9 @@ def span(s: dict) -> str:
     return span_of(s["net_lo"], s["net_hi"])
 
 
-def ranked(scored: list[dict], prefs: dict | None = None) -> list[dict]:
-    """메인 층을 최대 금리 순으로 (`decisions/0017`). 정렬 규칙은 `calculate.main` 과 같다.
+def ranked(scored: list[dict], prefs: dict | None = None,
+           order: str = "hi") -> list[dict]:
+    """메인 층을 줄 세운다 (`decisions/0017`). 규칙은 `prefs.sorter()` 한 곳에 있다.
 
     **`prefs` 를 주면 세후 가중합 순이 된다** (`prereg-12` §3 · 이슈 #24). 안 주면
     조정이 전부 0 이라 `net_hi` 순과 **소수점까지 같다** — 기본값을 우리가 정하지
@@ -144,7 +145,7 @@ def ranked(scored: list[dict], prefs: dict | None = None) -> list[dict]:
     """
     main = [s for s in scored if s["tier"] in C.MAIN_TIERS]
     P.annotate(main, prefs or {})
-    return sorted(main, key=P.sort_key)
+    return sorted(main, key=P.sorter(order, prefs))
 
 
 def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
@@ -185,7 +186,8 @@ def show_list(items: list[dict], top: int | None, prev: list[str] | None = None)
 
 
 def status_facts(plan: dict, state: dict, scored: list[dict], total: int,
-                 start: dict | None = None, prefs: dict | None = None) -> dict:
+                 start: dict | None = None, prefs: dict | None = None,
+                 order: str = "hi") -> dict:
     """상태바가 말하는 **사실**만 만든다 — 문자열을 만들지 않는다 (F4-0 · 이슈 #36).
 
     렌더와 사실을 가르는 이유는 웹이다. 화면 계약 A4·A6 은 이미 이 dict 를 읽고
@@ -211,7 +213,7 @@ def status_facts(plan: dict, state: dict, scored: list[dict], total: int,
     fixed = sum(1 for s in main if s["tier"] == "확정")
     # **1위는 화면 목록의 1위여야 한다** — 선호가 걸리면 목록 순서가 바뀌므로 여기도
     # 같은 정렬을 써야 한다. 안 그러면 화면 계약 A8(성과 줄 = 1위 상품)이 깨진다
-    top = ranked(scored, prefs)[0] if main else None
+    top = ranked(scored, prefs, order)[0] if main else None
     return {"left": left, "answered": answered, "total_now": now_total,
             "done": answered, "fixed": fixed, "main": len(main),
             "top1": top["net_hi"] if top else 0.0,
@@ -219,20 +221,24 @@ def status_facts(plan: dict, state: dict, scored: list[dict], total: int,
             "top1_name": top["name"] if top else "",
             "width": round(top["net_hi"] - top["net_lo"], 4) if top else 0.0,
             # 성과 줄의 낱말. **선호가 걸리면 1위가 최고 금리가 아니다** (`0030`)
-            "성과_라벨": "1위" if prefs else "최고",
+            "성과_라벨": ("1위" if prefs else
+                       # `lo` 로 세우면 1위는 **최고 금리가 아니다** — 확정 금리가
+                       # 가장 높은 상품이다. 낱말이 그것을 말해야 한다(`0030`)
+                       "확실히 받는 것 중 최고" if order == "lo" else "최고"),
             "폭_시작": (start or {}).get("width"),
             "처음_총": total}
 
 
 def status_lines(plan: dict, state: dict, scored: list[dict], total: int,
                  start: dict | None = None,
-                 prefs: dict | None = None) -> tuple[list[str], dict]:
+                 prefs: dict | None = None,
+                 order: str = "hi") -> tuple[list[str], dict]:
     """상태바 — 진행 · 성과(내 금리 범위) · 확정 수 (`0024` P4 → `0029` 개정).
 
     **사실은 `status_facts()` 가 만들고 여기서는 그리기만 한다** (F4-0). 그래서 이
     함수는 `st` 밖의 값을 읽지 않는다 — 웹 렌더러가 같은 `st` 로 같은 말을 할 수 있다.
     """
-    st = status_facts(plan, state, scored, total, start, prefs)
+    st = status_facts(plan, state, scored, total, start, prefs, order)
     bar_w = 32
     filled = 0 if not st["total_now"] else round(st["answered"] / st["total_now"] * bar_w)
     shrunk = (f"  (전체 {total}→{st['total_now']}개)"
@@ -280,7 +286,8 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
                         top: int | None, outside: dict | None = None,
                         total_all: int | None = None,
                         start: dict | None = None,
-                        prefs: dict | None = None) -> tuple[str, dict]:
+                        prefs: dict | None = None,
+                        order: str = "hi") -> tuple[str, dict]:
     """**중단하거나 끝냈을 때 사용자가 보는 화면 전체**를 문자열로 만든다.
 
     루프의 3단계가 이 함수를 출력하고, 화면 계약 검사가 **같은 함수**를 모든 중간
@@ -293,12 +300,13 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
     """
     import view as V
 
-    vm = V.build(scored, plan, state, total, top, outside, total_all, start, prefs)
+    vm = V.build(scored, plan, state, total, top, outside, total_all, start, prefs,
+                 order)
     st = vm["progress"]
     # A12·A13 — 세후 라벨과 성격 고지는 **금리보다 위**에 둔다 (`0035`)
     lines = [f"  {vm['meta']['세후_라벨']}", f"  {vm['meta']['고지']}"]
     lines += [product_line(i, s) for i, s in enumerate(vm["products"], 1)]
-    lines += status_lines(plan, state, scored, total, start, prefs)[0]
+    lines += status_lines(plan, state, scored, total, start, prefs, order)[0]
     # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
     lines += P.lines(prefs or {}, vm["prefs"]["막힌_상품"])
     if vm["메인밖"]["수"]:
@@ -334,14 +342,23 @@ def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
 
     문구를 **자르지 않는다.** 질문 문장을 자르면 조건이 달라진다.
     """
+    # **웹과 같은 카드를 읽는다** (`0039` 반증 조건 1 — 한쪽만 쓰는 칸을 만들지 않는다).
+    # 그래서 기관도 여기 같이 나온다
+    card = V.question_card(key, slot)
+    문구 = card["문구"] if card else []
+
+    def _quote(f: dict, cut: int | None = None) -> str:
+        """기관 — 문구. 기관이 없으면 문구만."""
+        ev = f["문구"][:cut] if cut else f["문구"]
+        return f'{f["기관"]} — "{ev}"' if f["기관"] else f'"{ev}"'
+
     if "#" in key:                             # 문구 단위 질문
-        ev = sorted(slot["evidence"])[0] if slot["evidence"] else "(문구 없음)"
-        head = f'"{ev}"'
+        head = _quote(문구[0]) if 문구 else "(문구 없음)"
         lines = [f"      위는 공시 문구 원문입니다 — 충족하십니까? "
                  f"(조건 유형 {slot['kind']})"]
     else:                                      # 조건 유형 질문
         head = f"{key} — 이 조건을 충족하십니까?"
-        lines = [f'      공시 문구  "{ev[:74]}"' for ev in sorted(slot["evidence"])[:3]]
+        lines = [f"      공시 문구  {_quote(f, 74)}" for f in 문구[:3]]
     return head, lines + ["      [예] [아니오] [모름] · [그만]"]
 
 

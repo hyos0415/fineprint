@@ -241,6 +241,34 @@ def sort_key(s: dict):
             -s["net_hi"], -s["net_lo"], s["name"])
 
 
+def sorter(order: str = "hi", prefs: dict | None = None):
+    """정렬 키 하나 — **CLI · 대화 루프 · 웹이 같은 것을 쓴다** (`0039`).
+
+    `0017` 이 정한 규칙 그대로다.
+    ```
+    선호가 있으면    세후 가중합 순 (`prereg-12`) — 선호가 정렬을 이긴다
+    hi (기본값)     다 채웠을 때 순  — net_hi → net_lo → 이름
+    lo             확정된 값 순    — net_lo → net_hi → 이름
+    ```
+
+    **왜 함수로 뺐나** (2026-09-02 · `prereg-14` §8). 이 규칙이 세 군데 있었다 —
+    `calculate.main` 의 인라인 정렬 · `ask_loop.ranked` · `status_facts`. 그런데
+    `--sort lo` 는 CLI 에만 있어서 **웹은 최대순 하나뿐이었다.**
+
+    조건을 못 채우는 사용자가 화면 맨 위에서 자기가 받을 상품을 못 보는 것이
+    사람 완주 2런에서 관측됐고, 무작위 200명 중 **19.5%가 그 상태**였다(최대순 1위와
+    확정순 1위가 다르고, 절반은 0.5%p 이상 차이다). `0017` 이 *"조건을 못 채우는
+    사용자에게만 크게 움직인다"* 고 예측한 자리인데 구현이 반만 따라갔던 것이다.
+
+    **규칙을 한 곳에 모아야 노출해도 갈라지지 않는다.**
+    """
+    if prefs:
+        return sort_key
+    if order == "lo":
+        return lambda s: (-s["net_lo"], -s["net_hi"], s["name"])
+    return lambda s: (-s["net_hi"], -s["net_lo"], s["name"])
+
+
 def lines(prefs: dict, n_blocked: int = 0) -> list[str]:
     """화면 계약 **A10** — 옮긴 가중치 전부를 %p 로 보여주고 고치는 방법을 적는다.
 

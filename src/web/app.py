@@ -101,6 +101,11 @@ class ScreenRequest(BaseModel):
     kinds: str | None = Field(None, description="상품군 스코프 — 예금/적금")
     prefs: str | None = Field(None, description="선호 — `영업점=되도록안간다,확실성=조금`")
     top: int | None = Field(10, ge=1, le=500, description="목록에 담을 상품 수")
+    order: Literal["hi", "lo"] = Field(
+        "hi",
+        description="정렬 — hi 다 채웠을 때 순(`0017` 기본값) · lo 확정된 값 순. "
+                    "**조건을 못 채우는 사용자는 lo 를 봐야 한다** (`prereg-14` §8)",
+    )
     state: dict[str, Any] = Field(
         default_factory=dict,
         description="지금까지의 답. `{조건유형: true|false|\"모름\"}` 또는 수치. "
@@ -159,10 +164,8 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
         raise HTTPException(
             status_code=400,
             detail=f"스코프에 맞는 상품이 없다 (기관={req.company} 상품군={req.kinds})")
-    unknown = [k for k in req.state
-               if k not in C.CONDITION_TYPES
-               and not (k.rpartition("_")[2] in ("금액", "횟수")
-                        and k.rpartition("_")[0] in C.CONDITION_TYPES)]
+    # 상태 키 판정은 `calculate.is_state_key()` 한 곳에서 한다 — 복사하면 갈라진다
+    unknown = [k for k in req.state if not C.is_state_key(k)]
     if unknown:
         raise HTTPException(status_code=400, detail=f"모르는 조건 유형: {unknown}")
 
@@ -176,7 +179,7 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
     total_all = (C.questions_left(C.question_plan(rows_all, by_pair), {})
                  if len(rows) < len(rows_all) else None)
     vm = V.build(scored, plan, req.state, total, req.top, outside, total_all,
-                 None, prefs)
+                 None, prefs, req.order)
     reports = [R.build(s, i, prefs) for i, s in enumerate(vm["products"], 1)]
     return vm, reports
 
@@ -208,6 +211,24 @@ async def screen_html(request: Request) -> str:
     hidden 으로 돌려보낸다 (`0040` 무상태).
     """
     f = await _form(request)
+    # **HTML 경로는 어떤 오류든 HTML 로 답한다.** 사람 완주 2런에서 날 JSON 을 봤다 —
+    # `{"detail": "모르는 조건 유형: [...]"}` 가 화면에 그대로 나왔다.
+    #
+    # 처음 고칠 때는 `_screen_payload` **하나만** 감쌌는데, 그 위쪽에서 나는 오류
+    # (답 검증 · 기간 · 정렬)는 그대로 새어 나갔다. 실제로 `order=middle` 이
+    # 날 JSON 으로 나오는 것을 검증에서 잡았다. **폼을 읽은 다음부터 전부 감싼다.**
+    #
+    # 에러 계약이 `/api/screen`(JSON)과 `POST /screen`(HTML)에서 다르다 —
+    # 같은 함수를 쓰되 **답하는 모양만** 갈라진다.
+    try:
+        return _screen_from_form(f)
+    except HTTPException as e:
+        return HTMLResponse(RENDER.render_start(f, str(e.detail)),
+                            status_code=e.status_code)
+
+
+def _screen_from_form(f: dict[str, str]) -> str:
+    """폼 하나를 화면 하나로. **오류는 그냥 던진다** — HTML 로 바꾸는 것은 위에서 한다."""
 
     def get(name: str, default: str = "") -> str:
         v = f.get(name, default)
@@ -234,12 +255,17 @@ async def screen_html(request: Request) -> str:
 
     company, kinds = get("company"), get("kinds")
     prefs_arg = get("prefs") or _prefs_from_form(f)
+    # 정렬 (`prereg-14` §8 A안). 폼이 안 보내면 `0017` 의 기본값이다
+    order = get("order", "hi") or "hi"
+    if order not in ("hi", "lo"):
+        raise HTTPException(status_code=400, detail=f"모르는 정렬: {order}")
     form = {"snapshot": get("snapshot", "20260826"), "group": get("group", "bank"),
             "term": term, "company": company, "kinds": kinds, "prefs": prefs_arg,
+            "order": order,
             "state_json": json.dumps(state, ensure_ascii=False)}
     req = ScreenRequest(snapshot=form["snapshot"], group=form["group"], term=term,
                         company=company or None, kinds=kinds or None,
-                        prefs=prefs_arg or None, top=10, state=state)
+                        prefs=prefs_arg or None, top=10, state=state, order=order)
     vm, reports = _screen_payload(req)
     return RENDER.render_screen(vm, form, reports)
 
