@@ -32,7 +32,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import calculate as C  # noqa: E402
 from extract_llm import load_pairs  # noqa: E402
 
-MAX_STEPS = 60          # 무한 루프 방어. 실제 질문 수는 은행권 23 · 저축은행 26 이다
+# 무한 루프 방어. F6 뒤로 질문이 기관별로 갈려 은행권 90 · 저축은행 45 다
+# (`prereg-15` P5). 옛 값 60 은 곡선을 조용히 잘랐다
+MAX_STEPS = 400
 
 
 def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
@@ -81,9 +83,9 @@ def stats(scored: list[dict]) -> dict:
 COVERAGE_FLOOR = {("bank", 12): 79.7, ("savingsbank", 12): 36.7}   # 메인 층 비율 %
 
 
-def pending(scored: list[dict]) -> list[tuple[str, dict]]:
+def pending(scored: list[dict], state: dict | None = None) -> list[tuple[str, dict]]:
     """아직 안 물어본 질문을 **고정된 우선순위**로. 규칙은 `calculate.rank_questions`."""
-    return C.rank_questions(scored)
+    return C.rank_questions(scored, state)
 
 
 def curve(stamp: str, group: str, term: int) -> list[dict]:
@@ -101,7 +103,7 @@ def curve(stamp: str, group: str, term: int) -> list[dict]:
         scored = score_all(rows, by_pair, state, tax)
         st = stats(scored)
         swap = "-" if prev_top3 is None else str(len(set(prev_top3) - set(st["top3"])))
-        left = pending(scored)
+        left = pending(scored, state)
         nxt = (f"{left[0][0]} ({len(left[0][1]['products'])}상품 · 남은질문 {len(left)})"
                if left else "— 없음")
         print(f"{k:>8} {st['메인']:>5} {st['확정']:>5} {st['범위']:>5} "

@@ -45,8 +45,30 @@
 {# 질문 하나 — 공시 문구를 **자르지 않는다** (`0027` · `prereg-10` §6) #}
 {% if q['현재'] %}
 {% set cur = q['현재'] %}
+{% if cur['다중'] %}
+{# 목록 질문 (F6 · `prereg-15`) — 답 셋의 유일한 예외다. 고르지 않은 기관은 답이
+   **유도되므로**, 무엇이 유도되는지를 화면이 반드시 말해야 한다 (`설명`). #}
 <div class="q">
-  <b>{{ cur['유형'] }} — 이 조건을 충족하십니까?</b>
+  <b>{{ cur['질문'] }}</b>
+  <p class="notice">{{ cur['설명'] }}</p>
+  <p class="notice">이 답 하나가 상품 {{ cur['여는_상품수'] }}개의 판정을 엽니다.</p>
+  <form method="post" action="/screen">
+    {% include "_carry.html" %}
+    <input type="hidden" name="answer_key" value="{{ cur['key'] }}">
+    {% for bank in cur['선택지'] %}
+    <label class="pick"><input type="checkbox" name="answer_bank" value="{{ bank }}"> {{ bank }}</label>
+    {% endfor %}
+    <p>
+      <button type="submit" name="answer" value="고름">고른 대로 계속</button>
+      <button type="submit" name="answer" value="모름">모르겠습니다</button>
+    </p>
+    <p class="notice">하나도 고르지 않고 눌러도 됩니다 — <b>거래해 본 기관이 없다</b>는 답입니다.
+      "모르겠습니다" 를 고르면 유도하지 않고 기관마다 따로 여쭙습니다.</p>
+  </form>
+</div>
+{% else %}
+<div class="q">
+  <b>{{ cur['질문'] }}</b>
   <p class="notice">이 답 하나가 상품 {{ cur['여는_상품수'] }}개의 판정을 엽니다.</p>
   {# 문구를 **자르지 않는다** (`0027` · `prereg-10` §6). 다만 한 유형에 문구가 20개
      넘게 붙는 경우가 있어(자동이체 21개) 앞의 셋만 펼치고 나머지는 접는다.
@@ -71,6 +93,7 @@
     {% endfor %}
   </form>
 </div>
+{% endif %}
 {% else %}
 <p class="card"><b>더 물을 것이 없습니다.</b> 아래가 최종 결과입니다.</p>
 {% endif %}
