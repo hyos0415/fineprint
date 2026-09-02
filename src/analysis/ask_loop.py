@@ -359,25 +359,28 @@ def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
     # A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 (`problem.md` §3)
     lines += P.lines(prefs or {}, vm["prefs"]["막힌_상품"])
     if vm["메인밖"]["수"]:
+        # **`메인 밖` 은 우리 말이었다** (F5 · 이슈 #45). 층 이름도 라벨로 낸다
         tally = vm["메인밖"]["층별"]
-        lines.append(f"\n  메인 밖 {vm['메인밖']['수']}개 — "
-                     + " · ".join(f"{t} {n}" for t, n in sorted(tally.items())))
+        lines.append(f"\n  계산할 수 없는 상품 {vm['메인밖']['수']}개 — "
+                     + " · ".join(f"{C.tier_label(t)} {n}"
+                                  for t, n in sorted(tally.items())))
     out = vm["notices"]["스코프밖"]
     if out:                                        # A7 — 좁히는 대가를 숨기지 않는다
         wider = ("" if vm["notices"]["넓히면_질문"] is None
                  else f" · 넓히면 질문이 {vm['notices']['넓히면_질문']}개로 늘어납니다")
-        lines.append(f"\n  ⚠ 스코프 밖에 {out['net_hi']:.2f}% 가 있습니다 "
+        lines.append(f"\n  ⚠ 지금 고른 범위 밖에 {out['net_hi']:.2f}% 가 있습니다 "
                      f"({out['company']} {out['name'][:22]} · "
                      f"+{out['gap']:.2f}%p · [{out['channel']}] · "
                      f"조건 다 채웠을 때){wider}")
-    shown = {c for c, _text in vm["notices"]["사유"]}
-    for header, codes in (("답하면 없어지는 사유", ASKABLE_CAVEATS),
-                          ("되물어도 못 채우는 사유", HARD_CAVEATS)):
+    shown = {r["코드"] for r in vm["notices"]["사유"]}
+    for header, codes in (("답하면 없어지는 것", ASKABLE_CAVEATS),
+                          ("답해도 못 채우는 것", HARD_CAVEATS)):
         hit = [c for c in codes if c in shown]
         if hit:
-            lines.append(f"\n  {header} — 이 문장을 사용자에게 보여준다")
+            lines.append(f"\n  {header}")
             for c in hit:
-                lines.append(f'    {c:<10}"{C.CAVEAT[c]}"')
+                # 코드가 아니라 라벨을 앞에 세운다 (F5) — 코드는 로그·검사가 쓴다
+                lines.append(f'    {C.caveat_label(c):<20}"{C.CAVEAT[c]}"')
     return "\n".join(lines), st
 
 
@@ -427,7 +430,7 @@ def bad_answer_hint(slot: dict, kind: str) -> str:
     `prereg-10` 이 수치 질문 자체를 없앴으므로 이제 답은 셋뿐이다.
     """
     if slot.get("unit") == C.LIST_UNIT:
-        return ("      못 읽었습니다. 위 번호나 기관 이름을 쉼표로 적어 주세요 "
+        return ("      못 읽었습니다. 위 번호나 은행 이름을 쉼표로 적어 주세요 "
                 "(거래한 곳이 없으면 '없음')")
     if kind == "number":
         return ("      숫자로는 판정하지 않습니다 — 위 문구를 충족하시는지 "
@@ -518,8 +521,8 @@ def run(stamp: str, group: str, term: int, top: int,
     rows = C.scope_rows(rows_all, company, kinds)
     if not rows:
         cos = sorted({r["company"] for r in rows_all if r["company"]})
-        raise SystemExit(f"스코프에 맞는 상품이 없다 (기관={company} 상품군={kinds})\n"
-                         f"가능한 기관: {', '.join(cos)}")
+        raise SystemExit(f"찾는 범위에 맞는 상품이 없다 (은행={company} 예금/적금={kinds})\n"
+                         f"가능한 은행: {', '.join(cos)}")
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
     total_all = C.questions_left(C.question_plan(rows_all, by_pair), {})
@@ -529,7 +532,7 @@ def run(stamp: str, group: str, term: int, top: int,
 
     print(f"\n=== 되묻기 질문 루프 · {group} {term}개월 · 스냅샷 {stamp} ===")
     if scoped:
-        print(f"스코프     기관 {company or '전체'} · 상품군 {kinds or '전체'} "
+        print(f"찾는 범위   은행 {company or '전체'} · 예금/적금 {kinds or '전체'} "
               f"— 카탈로그 {len(rows_all)}개 중 {len(rows)}개 (질문 {total_all}→{total}개)")
     print(f"상품 {len(rows)}개 · 전부 답하면 질문 {total}개입니다. "
           f"언제든 '그만' 을 입력하면 멈춥니다.")
@@ -546,13 +549,13 @@ def run(stamp: str, group: str, term: int, top: int,
     start = dict(st)                     # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`)
     out0 = V.outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
-        print(f"\n  ⚠ 스코프 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
+        print(f"\n  ⚠ 지금 고른 범위 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
               f"({out0['company']} {out0['name'][:22]} · +{out0['gap']:.2f}%p · "
               f"[{out0['channel']}] · 조건 다 채웠을 때) · "
               f"넓히면 질문이 {total_all}개로 늘어납니다")
     start_top1 = st["top1"]
     print("\n" + "-" * 92)
-    print("■ 2단계 — 질문 루프. 커버리지가 큰 질문부터 묻습니다 (decisions/0018 고정 순서)")
+    print("■ 2단계 — 질문 루프. 많은 상품을 여는 질문부터 묻습니다 (순서는 고정입니다)")
 
     quit_at, quit_why, tick = None, "", time.monotonic()
     for step in range(1, MAX_STEPS + 1):
@@ -566,7 +569,8 @@ def run(stamp: str, group: str, term: int, top: int,
             break
         head, lines = prompt_for(key, slot)
         print(f"\n  [{step}] {head}")
-        print(f"      이 답 하나가 상품 {len(slot['products'])}개의 판정을 엽니다")
+        print(f"      이 답 하나로 상품 {len(slot['products'])}개의 금리를 "
+              f"계산할 수 있게 됩니다")
         for line in lines:
             print(line)
         while True:

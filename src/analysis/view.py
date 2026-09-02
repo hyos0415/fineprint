@@ -67,7 +67,7 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
         return None                      # 숨길 것이 없다 — 밖이 더 좋지 않다
     return {"name": best_out["name"], "net_hi": best_out["net_hi"],
             "gap": round(best_out["net_hi"] - best_in, 3),
-            "company": best_out.get("company") or "",
+            "company": C.org_label(best_out.get("company") or ""),      # 화면 표기 (F5)
             "channel": best_out.get("channel") or ""}
 
 
@@ -94,21 +94,28 @@ def display(s: dict) -> dict:
         left = "확정"
     # 선호 조정 — **금리 칸이 아니라 별도 칸이다** (`prereg-12` §3 · A11)
     if s.get("_blocked"):
-        adj = "선호밖"
+        adj = "선호와 안 맞음"          # 옛 `선호밖` — 만든 사람만 아는 말이었다 (F5)
     elif s.get("_adj"):
         adj = f"조정 {s['_adj']:+.2f}%p"
     else:
         adj = ""
     return {
         "이름": s["name"],
-        "기관": s.get("company") or "",
+        # 화면 표기 — 공시 이름의 법인 형태를 뗀다 (F5). **신원은 `company` 가 진다**
+        "기관": C.org_label(s.get("company") or ""),
         "범위": L.span(s),          # 같을 때만 숫자 하나다 (A1)
         "채널": s.get("channel") or "",
         "남은": left,
         "조정": adj,
         "조정_사유": s.get("_why") or [],
-        "주의": list(s.get("caveats") or []),
-        "층": s["tier"],
+        # **사유와 층을 라벨로 낸다** (F5 · 이슈 #45). 옛 화면은 코드를 그대로 태그로
+        # 썼다 — `주의:미응답` · 층 칸에 `추출불확실`. 코드는 상태 dict·세션 로그의
+        # 키라서 못 바꾸므로(`0031`), **표를 옆에 두고 화면만 라벨을 읽는다**
+        #
+        # **코드는 여기 다시 담지 않는다.** 검사·로그는 상품 dict 의 `caveats`·`tier` 를
+        # 그대로 읽는다 — 아무도 안 읽는 칸을 늘리면 그게 드리프트가 자라는 자리다(`0039`)
+        "주의": [C.caveat_label(c) for c in (s.get("caveats") or [])],
+        "층": C.tier_label(s["tier"]),
     }
 
 
@@ -142,30 +149,43 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
     # 없으면 사용자가 답을 고를 수 없다. 같은 문구를 여러 기관이 쓰면 전부 적는다.
     src = slot.get("출처") or {}
     문구 = [{"문구": ev,
-            "기관": " · ".join(sorted(o for o in src.get(ev, set()) if o))}
+            "기관": " · ".join(sorted(C.org_label(o) for o in src.get(ev, set()) if o))}
            for ev in sorted(slot["evidence"])]
     # **질문 문장을 뷰 모델이 만든다** (F6). 전에는 CLI 와 웹이 각자 만들었는데,
     # 기관이 붙은 뒤로 그러면 한쪽이 *"자동이체 — 충족하십니까"* 라고만 물어
     # **어느 은행 이야기인지 사라진다**. `0039` 가 막은 자리와 같은 모양이다.
-    기관 = key.partition("#")[0].partition("@")[2]
+    # 상태 키에는 **공시 이름**이 들어 있다(신원). 화면에는 표기 이름을 쓴다 (F5)
+    기관_원천 = key.partition("#")[0].partition("@")[2]
+    기관 = C.org_label(기관_원천)
     꼬리 = f" · {기관}" if 기관 else ""
     if slot["unit"] == C.LIST_UNIT:                       # 목록 질문 (F6)
         return {
             "key": key,
             "유형": slot["kind"],
             "단위": slot["unit"],
-            "질문": "거래해 본 기관을 골라 주세요 — 여러 곳을 고를 수 있습니다",
-            "설명": "고르지 않은 기관은 첫거래로, 그 기관의 실적 조건은 "
+            "질문": "거래해 본 은행을 골라 주세요 — 여러 곳을 고를 수 있습니다",
+            "설명": "고르지 않은 은행은 '첫 거래' 로, 그 은행에서의 실적 조건은 "
                     "'아니오' 로 채워집니다 — 거래가 없으면 실적이 있을 수 없습니다",
             "문구": [],
             "여는_상품수": len(slot["products"]),
-            "선택지": list(slot["기관"]),
+            # `선택지` 는 **화면에 보일 이름**이고, 답으로 돌려보낼 것은 `값` 이다 —
+            # 상태에는 공시 이름이 들어가야 `answer_of()` 가 상품의 기관과 짝짓는다
+            "선택지": [C.org_label(b) for b in slot["기관"]],
+            "값": list(slot["기관"]),
             "다중": True,
         }
+    # **내부 이름을 질문 문장에 넣지 않는다** (F5 · 이슈 #45). 옛 화면은
+    # `급여_연금이체 — 이 조건을 충족하십니까?` 라고 물었다 — 만든 사람만 아는 말이다
+    #
+    # 기관은 **라벨 안의 `이 기관` 자리**에 들어간다. 꼬리로 붙이면
+    # *"이 기관의 다른 상품 가입·보유 · 국민은행"* 이 되어 두 번 읽어야 한다
+    이름 = C.type_label(slot["kind"], 기관)
+    붙었다 = 기관 and 기관 in 이름
+    꼬리 = "" if 붙었다 else 꼬리
     if "#" in key:
-        질문 = f"위는 공시 문구 원문입니다 — 충족하십니까? (조건 유형 {slot['kind']}{꼬리})"
+        질문 = f"위는 공시 문구 원문입니다 — 충족하십니까? ({이름}{꼬리})"
     else:
-        질문 = f"{slot['kind']}{꼬리} — 이 조건을 충족하십니까?"
+        질문 = f"{이름}{꼬리} — 이 조건을 충족하십니까?"
     return {
         "key": key,
         "유형": slot["kind"],
@@ -175,6 +195,7 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
         "문구": 문구,
         "여는_상품수": len(slot["products"]),
         "선택지": ["예", "아니오", "모름"],
+        "값": ["예", "아니오", "모름"],
         "다중": False,
     }
 
@@ -199,6 +220,8 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
     tally = {}
     for s in rest:
         tally[s["tier"]] = tally.get(s["tier"], 0) + 1
+    # 층 라벨로 센 것도 같이 담는다 (F5) — 렌더러가 각자 라벨을 붙이면 세 곳이 갈라진다
+    tally_label = {C.tier_label(t): n for t, n in sorted(tally.items())}
 
     # 화면에 문장으로 나가야 하는 사유 — **코드가 아니라 문장**이다 (`0016` · A3)
     #
@@ -206,6 +229,8 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
     # 사유 문장은 메인 전체 것을 낸다 — 옛 코드가 그렇게 했고 화면 계약 A3 도 메인
     # 전체를 본다. 여기서 `shown` 으로 좁히면 화면에서 문장이 사라진다
     codes = [c for c in C.CAVEAT if any(c in s.get("caveats", []) for s in main)]
+    # **코드와 라벨과 문장을 한 자리에 담는다** (F5). 코드는 검사·로그가 읽고, 라벨과
+    # 문장은 화면이 읽는다 — 목록을 둘로 나누면 서로 다른 말을 하게 된다(`0035`)
     return {
         "meta": {
             "세후_라벨": L.tax_label(scored),      # A12 — 세율은 config 에서 온다
@@ -213,6 +238,10 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
             "세율": shown[0]["tax_rate"] if shown else None,
             # 이 화면이 무슨 순서인지 — 렌더러가 사용자에게 그대로 말한다
             "정렬": order,
+            # 남기고 **설명만 붙이는** 낱말 (F5 · 이슈 #45). `%p` 는 정확해서 필요하다 —
+            # 없애면 흐려지므로 첫 등장에서 풀어 준다
+            "%p 설명": C.PP_NOTE,
+            "우대조건 설명": C.BONUS_NOTE,
         },
         # A4·A6 이 읽는 것. **이미 뷰 모델이었다** — `status_lines()` 가 돌려준다
         "progress": st,
@@ -224,13 +253,14 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
             "폭_시작": (start or {}).get("width"),
         },
         "products": shown,                          # 복사하지 않는다 — 같은 객체다
-        "메인밖": {"수": len(rest), "층별": tally},
+        "메인밖": {"수": len(rest), "층별": tally, "층별_라벨": tally_label},
         "questions": {"남은": st["left"], "답한": st["answered"],
                       "지금_총": st["total_now"], "처음_총": total,
                       # 다음에 물을 질문 하나. 없으면 None (더 물을 게 없다)
                       "현재": question_card(*next_question(scored, state))},
         "notices": {
-            "사유": [(c, C.CAVEAT[c]) for c in codes],       # A3
+            "사유": [{"코드": c, "라벨": C.caveat_label(c), "문장": C.CAVEAT[c]}
+                   for c in codes],                             # A3 · F5
             "스코프밖": outside,                              # A7
             "넓히면_질문": total_all,
         },
@@ -261,14 +291,17 @@ def check_model(vm: dict) -> list[dict]:
             hit("A1", s["name"], f"net_lo {s['net_lo']} > net_hi {s['net_hi']}")
 
     # A3 — 화면에 붙은 사유마다 **문장**이 담겼나. 코드만 있으면 사용자는 못 읽는다
-    have = {c for c, _t in vm["notices"]["사유"]}
+    have = {r["코드"] for r in vm["notices"]["사유"]}
     for s in vm["products"]:
         for c in s.get("caveats", []):
             if c not in have:
                 hit("A3", s["name"], f"사유 {c} 의 문장이 뷰 모델에 없다")
-    for c, text in vm["notices"]["사유"]:
-        if not text:
-            hit("A3", "-", f"사유 {c} 의 문장이 비어 있다")
+    for r in vm["notices"]["사유"]:
+        if not r["문장"]:
+            hit("A3", "-", f"사유 {r['코드']} 의 문장이 비어 있다")
+        # A14 — 코드가 아니라 **사람 말**이 화면으로 가야 한다 (F5 · 이슈 #45)
+        if not r["라벨"] or r["라벨"] == r["코드"]:
+            hit("A14", "-", f"사유 {r['코드']} 의 사용자용 라벨이 없다")
 
     # A8 — 성과 줄의 재료가 목록 1위와 같은 객체인가
     head, prods = vm["headline"]["상품"], vm["products"]
@@ -295,6 +328,10 @@ def check_model(vm: dict) -> list[dict]:
         hit("A12", "-", "세후 라벨이 비어 있다")
     if "세후" not in (vm["meta"]["세후_라벨"] or ""):
         hit("A12", "-", "세후 라벨에 '세후' 가 없다")
+    # A14 — 남기기로 한 낱말은 **풀어 줄 재료**가 뷰 모델에 있어야 한다 (F5)
+    for 칸 in ("%p 설명", "우대조건 설명"):
+        if not vm["meta"].get(칸):
+            hit("A14", "-", f"{칸} 이 뷰 모델에 없다 — 낱말을 풀어 줄 수 없다")
     if vm["meta"]["고지"] != C.NOTICE:
         hit("A13", "-", "고지가 calculate.NOTICE 와 다르다")
 
@@ -316,7 +353,10 @@ def check_model(vm: dict) -> list[dict]:
             # **목록 질문** (F6) — 문구가 아니라 기관 목록이 선택지다. 무엇이 유도되는지
             # 화면이 말해야 한다: 안 고른 기관의 답을 우리가 채우기 때문이다
             if not cur["선택지"]:
-                hit("A3", cur["key"], "목록 질문에 고를 기관이 없다")
+                hit("A3", cur["key"], "목록 질문에 고를 은행이 없다")
+            if len(cur["선택지"]) != len(cur["값"]):
+                hit("A3", cur["key"],
+                    f"보일 이름 {len(cur['선택지'])}개 ≠ 답할 값 {len(cur['값'])}개")
             if not cur.get("설명"):
                 hit("A3", cur["key"], "목록 질문에 무엇이 유도되는지 설명이 없다")
         else:
@@ -333,7 +373,7 @@ def check_model(vm: dict) -> list[dict]:
                 hit("A3", cur["key"], f"선택지가 셋이 아니다: {cur['선택지']}")
             # **기관 상대 조건이면 어느 기관인지 질문에 있어야 한다** (F6) — 없으면
             # 사용자가 "당행" 을 자기가 아는 은행으로 읽는다
-            기관 = cur["key"].partition("#")[0].partition("@")[2]
+            기관 = C.org_label(cur["key"].partition("#")[0].partition("@")[2])
             if 기관 and 기관 not in cur["질문"]:
                 hit("A3", cur["key"], f"질문에 기관({기관})이 없다: {cur['질문']}")
     return bad

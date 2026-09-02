@@ -29,6 +29,11 @@
         *"수익률(이자율) 표기시 '세전'인지 '세후'인지를 누락"* 하면 부당한 표시·광고다
     A13 화면에 **이 화면이 무엇인지 밝히는 고지**가 있어야 한다 (`0035` · A안) —
         공시 계산 결과이며 판매·중개하지 않는다는 사실
+    A14 **우리가 지은 내부 이름이 화면에 없어야 한다** (F5 · 이슈 #45) —
+        `급여_연금이체` · `추출불확실` · `미응답` · `스코프` 처럼 만든 사람만 아는 말.
+        목록은 `calculate.internal_words()` 한 곳에서 온다. `0019` 와 다르다 —
+        `0019` 는 *뜻을 모르는 남의 낱말*("탑스")에 뜻을 지어내는 것을 막았고, 여기는
+        **우리가 지은 낱말**이라 뜻을 정확히 안다
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -66,6 +71,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -84,6 +90,71 @@ EPS = 1e-6
 # 지금 3단계 화면은 `HARD_CAVEATS` 여섯 개만 문장으로 낸다. 그 차이가 위반으로 잡히면
 # **그것이 이 검사가 찾은 것**이다(`prereg-09` §5 가 A3 위반 가능성을 예고했다).
 A3_CODES = tuple(C.CAVEAT.keys())
+
+
+# 웹은 **보이는 글자만** 본다. 상태 키가 `answer_key`·`state_json` 의 값으로 폼에
+# 실려야 하는데(`0040` 무상태), 그건 사용자가 읽는 글자가 아니다. 태그를 지우면
+# 속성값이 같이 사라지므로 남는 것이 정확히 **화면에 보이는 글자**다.
+TAG = re.compile(r"<[^>]*>")
+# `<style>`·`<script>` 안은 **화면 글자가 아니다.** 태그만 지우면 CSS 본문이 남아
+# 거기 쓴 한글 주석까지 화면에 나간 낱말로 세게 된다
+HIDDEN = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.S | re.I)
+
+
+def visible(html: str) -> str:
+    return TAG.sub(" ", HIDDEN.sub(" ", html))
+
+
+# 결정 번호·사전등록 좌표 — `0017` · `decisions/0018` · `prereg-15` 꼴.
+# 금리(`2.55`)·스냅샷(`20260826`)·개수와 겹치지 않게 **네 자리 앞이 0 인 것**만 본다
+DOC_REF = re.compile(r"decisions?/\d{4}|prereg-\d{2}|(?<![\d.])0\d{3}(?![\d.])")
+
+
+def check_words(text: str, where: str) -> list[dict]:
+    """A14 — 내부 이름이 화면에 남았나 (F5 · 이슈 #45).
+
+    **목록은 `calculate.internal_words()` 한 곳에서 온다.** 검사기가 자기 목록을
+    들면 표를 고칠 때 한쪽만 고쳐진다(`0035`).
+
+    상품명은 목록에 없다 — `해피라이프_여행스케치적금` 처럼 **은행이 지은 이름에도
+    밑줄이 있다.** 그건 공시 원문이고 손대면 `0031` 이 막은 자리에 들어간다.
+    """
+    bad = [{"assert": "A14", "product": w,
+            "detail": f"{where}에 내부 이름 `{w}` 이 남아 있다"}
+           for w in C.internal_words() if w in text]
+    # **우리 기록의 좌표도 사용자 화면에 쓰지 않는다** (F5). 실제로 새고 있었다 —
+    # 리포트가 *"왜 이 순서인가 — 세후 최대 금리 순 (0017 — 다 채웠을 때 순)"* 이라고
+    # 썼고, CLI 2단계 머리말이 *"(decisions/0018 고정 순서)"* 였다.
+    # `CLAUDE.md` 가 정한 것과 같다 — **결론을 먼저, 감사 번호로 시작하지 않는다.**
+    bad += [{"assert": "A14", "product": m,
+             "detail": f"{where}에 결정 번호 `{m}` 이 남아 있다 — 우리 기록의 좌표다"}
+            for m in sorted(set(DOC_REF.findall(text)))]
+    return bad
+
+
+def check_org_names(text: str, scored: list[dict], where: str) -> list[dict]:
+    """A14 — **공시 이름이 화면에 남았나** (F5). 표기가 달라지는 기관만 본다.
+
+    `농협은행주식회사`·`주식회사 케이뱅크` 처럼 법인 형태가 붙은 이름이 그대로 나가면
+    위반이다. 이름이 안 바뀌는 기관은 보지 않는다 — 그러면 검사가 정상 화면을 잡는다.
+    """
+    bad = []
+    seen: dict[str, str] = {}
+    for co in sorted({s.get("company") or "" for s in scored if s.get("company")}):
+        shown = C.org_label(co)
+        if shown != co and co in text:
+            bad.append({"assert": "A14", "product": co,
+                        "detail": f"{where}에 공시 이름 `{co}` 이 남아 있다 "
+                                  f"(화면 표기는 `{shown}`)"})
+        # **표기가 겹치면 서로 다른 은행이 한 이름으로 보인다** — `0031` 이 상품 신원에서
+        # 막은 실패와 같은 모양이다. `0046` 이 반증 조건으로 적어 둔 것을 검사로 만든다.
+        # 지금 스냅샷에서는 은행 17곳·저축은행 30곳 다 충돌 0 이다
+        if shown in seen and seen[shown] != co:
+            bad.append({"assert": "A14", "product": co,
+                        "detail": f"표기 이름 `{shown}` 이 `{seen[shown]}` 과 겹친다 — "
+                                  f"서로 다른 은행이 한 이름으로 보인다"})
+        seen[shown] = co
+    return bad
 
 
 def check_labels(screen: str) -> list[dict]:
@@ -135,19 +206,34 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
                  "detail": f"[웹] {detail}"}]
 
     bad: list[dict] = []
+    # **0단계 폼과 오류 화면도 사용자 화면이다** (F5 · A14). 실제로 여기 `스코프` 가
+    # 남아 있었다 — 오류가 화면으로 나가는 자리를 검사 밖에 두면 낱말이 거기 숨는다
+    for 화면, 이름 in ((RENDER.render_start(), "0단계 폼"),
+                    (RENDER.render_start({}, "찾는 범위에 맞는 상품이 없습니다"),
+                     "0단계 폼(오류)")):
+        for v in check_words(visible(화면), 이름):
+            bad += hit("A14", v["product"], v["detail"])
     # A12·A13 — 세후 라벨과 고지. 문구는 상수에서 온다(사본을 만들지 않는다)
     if "%" in html and "세후" not in html:
         bad += hit("A12", "-", "금리가 있는 화면에 `세후` 라벨이 없다")
     if L.NOTICE not in html:
         bad += hit("A13", "-", "성격 고지가 화면에 없다")
+    # A14 — **보이는 글자만** 본다 (F5). 상태 키와 답으로 보낼 공시 이름은 hidden·
+    # value 로 실려야 하므로, 태그를 지운 뒤에 본다
+    seen = visible(html)
+    for v in check_words(seen, "웹 화면") + check_org_names(seen, scored, "웹 화면"):
+        bad += hit("A14", v["product"], v["detail"])
     # A1 — 폭이 남은 상품은 범위로 그려야 한다
     for s in vm["products"]:
         if s["net_hi"] - s["net_lo"] > EPS and V.display(s)["범위"] not in html:
             bad += hit("A1", s["name"], f"범위 {V.display(s)['범위']} 가 화면에 없다")
-    # A3 — 사유는 **문장**으로 나가야 한다
-    for code, text in vm["notices"]["사유"]:
-        if text not in html:
-            bad += hit("A3", f"사유 {code}", f'"{text[:36]}…" 가 없다')
+    # A3 — 사유는 **문장**으로 나가야 한다. 그리고 태그는 **라벨**이어야 한다 (A14)
+    for r in vm["notices"]["사유"]:
+        if r["문장"] not in html:
+            bad += hit("A3", f"사유 {r['코드']}", f'"{r["문장"][:36]}…" 가 없다')
+        if r["라벨"] not in html:
+            bad += hit("A14", f"사유 {r['코드']}",
+                       f'사용자용 라벨 "{r["라벨"]}" 이 화면에 없다')
     # A7 — 스코프 밖 최고 금리
     if outside and f"{outside['net_hi']:.2f}" not in html:
         bad += hit("A7", outside["name"], "스코프 밖 최고 금리가 화면에 없다")
@@ -183,7 +269,8 @@ def check_report(scored: list[dict], top: int, prefs: dict | None,
     import report as R
     text = R.render_all(scored, top, prefs)
     bad = [{**v, "detail": f"[리포트] {v['detail']}", "session": tag, "step": -1}
-           for v in check_labels(text)]
+           for v in (check_labels(text) + check_words(text, "리포트")
+                     + check_org_names(text, scored, "리포트"))]
     main = L.ranked(scored, prefs)[:top]
     for s in main:
         block = R.render(R.build(s, 1, prefs))
@@ -205,7 +292,8 @@ def check_state(screen: str, scored: list[dict], tax: dict,
 
     A4 는 세션 단위라 따로 본다.
     """
-    bad = check_labels(screen)                  # A12·A13 (`0035`)
+    bad = (check_labels(screen) + check_words(screen, "화면")     # A12·A13 · A14
+           + check_org_names(screen, scored, "화면"))
     main = L.ranked(scored, prefs)
     for i, s in enumerate(main, 1):
         line = L.product_line(i, s)
@@ -400,6 +488,13 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
         if not ordered:
             break
         key, slot = ordered[0]
+        # **질문 화면도 사용자가 읽는 화면이다** (F5). `급여_연금이체` 가 가장 크게
+        # 보였던 자리가 여기다 — 최종 화면만 검사하면 이 자리가 검사 밖에 남는다
+        head, qlines = L.prompt_for(key, slot)
+        qtext = head + "\n" + "\n".join(qlines)
+        for v in (check_words(qtext, "질문 화면")
+                  + check_org_names(qtext, scored, "질문 화면")):
+            bad.append({**v, "session": tag, "step": step})
         raw, kind = pick_answer(slot, rng, persona)
         if L.apply_answer(state, key, slot, raw, kind) == "bad":
             bad.append({"assert": "검사기", "product": "-", "session": tag, "step": step,
@@ -485,7 +580,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A10", "가중치가 보이고 고칠 수 있다"),
                        ("A11", "가중치는 정렬만 바꾼다"),
                        ("A12", "금리 옆에 `세후` 라벨이 있다"),
-                       ("A13", "화면이 자기가 무엇인지 밝힌다")):
+                       ("A13", "화면이 자기가 무엇인지 밝힌다"),
+                       ("A14", "내부 이름이 화면에 없다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue

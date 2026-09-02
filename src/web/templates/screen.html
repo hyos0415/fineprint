@@ -51,25 +51,27 @@
 <div class="q">
   <b>{{ cur['질문'] }}</b>
   <p class="notice">{{ cur['설명'] }}</p>
-  <p class="notice">이 답 하나가 상품 {{ cur['여는_상품수'] }}개의 판정을 엽니다.</p>
+  <p class="notice">이 답 하나로 상품 {{ cur['여는_상품수'] }}개의 금리를 계산할 수 있게 됩니다.</p>
   <form method="post" action="/screen">
     {% include "_carry.html" %}
     <input type="hidden" name="answer_key" value="{{ cur['key'] }}">
     {% for bank in cur['선택지'] %}
-    <label class="pick"><input type="checkbox" name="answer_bank" value="{{ bank }}"> {{ bank }}</label>
+    {# 보이는 것은 표기 이름, 보내는 것은 공시 이름 — 신원이 갈라지면 안 된다 (F5) #}
+    <label class="pick"><input type="checkbox" name="answer_bank"
+      value="{{ cur['값'][loop.index0] }}"> {{ bank }}</label>
     {% endfor %}
     <p>
       <button type="submit" name="answer" value="고름">고른 대로 계속</button>
       <button type="submit" name="answer" value="모름">모르겠습니다</button>
     </p>
-    <p class="notice">하나도 고르지 않고 눌러도 됩니다 — <b>거래해 본 기관이 없다</b>는 답입니다.
-      "모르겠습니다" 를 고르면 유도하지 않고 기관마다 따로 여쭙습니다.</p>
+    <p class="notice">하나도 고르지 않고 눌러도 됩니다 — <b>거래해 본 은행이 없다</b>는 답입니다.
+      "모르겠습니다" 를 고르면 채워 넣지 않고 은행마다 따로 여쭙습니다.</p>
   </form>
 </div>
 {% else %}
 <div class="q">
   <b>{{ cur['질문'] }}</b>
-  <p class="notice">이 답 하나가 상품 {{ cur['여는_상품수'] }}개의 판정을 엽니다.</p>
+  <p class="notice">이 답 하나로 상품 {{ cur['여는_상품수'] }}개의 금리를 계산할 수 있게 됩니다.</p>
   {# 문구를 **자르지 않는다** (`0027` · `prereg-10` §6). 다만 한 유형에 문구가 20개
      넘게 붙는 경우가 있어(자동이체 21개) 앞의 셋만 펼치고 나머지는 접는다.
      **몇 개를 먼저 보여줄지는 배치 결정이다** — 내용을 빼거나 자르는 것이 아니다. #}
@@ -79,7 +81,7 @@
   {% if cur['문구']|length > 3 %}
   <details>
     <summary class="notice">공시 문구 {{ cur['문구']|length - 3 }}개 더 보기 —
-      <b>기관마다 문구가 다릅니다</b></summary>
+      <b>은행마다 문구가 다릅니다</b></summary>
     {% for f in cur['문구'][3:] %}
     <blockquote>{% if f['기관'] %}<b>{{ f['기관'] }}</b> — {% endif %}{{ f['문구'] }}</blockquote>
     {% endfor %}
@@ -101,16 +103,16 @@
 {# A7 — 좁히는 대가를 숨기지 않는다 (`0028` S4) #}
 {% if vm['notices']['스코프밖'] %}
 {% set out = vm['notices']['스코프밖'] %}
-<p class="card warn">⚠ 스코프 밖에 <b>{{ '%.2f'|format(out['net_hi']) }}%</b> 가 있습니다 —
+<p class="card warn">⚠ 지금 고른 범위 밖에 <b>{{ '%.2f'|format(out['net_hi']) }}%</b> 가 있습니다 —
   {{ out['company'] }} {{ out['name'] }} (+{{ '%.2f'|format(out['gap']) }}%p · [{{ out['channel'] }}] · 조건 다 채웠을 때)
   {% if vm['notices']['넓히면_질문'] %}· 넓히면 질문이 {{ vm['notices']['넓히면_질문'] }}개로 늘어납니다{% endif %}
 </p>
 {% endif %}
 
-{# A10 — 옮긴 가중치를 전부 보여주고 고치는 방법을 적는다 #}
+{# A10 — 옮긴 값을 전부 보여주고 고치는 방법을 적는다 #}
 {% if vm['prefs']['적용'] %}
 <h2>선호</h2>
-<p class="notice">답을 금리 %p 로 옮긴 결과입니다. <b>정렬만 바꿉니다 — 금리는 안 바뀝니다.</b></p>
+<p class="notice">답을 금리 차이(%p)로 옮긴 결과입니다. <b>순서만 바꿉니다 — 금리는 안 바뀝니다.</b></p>
 <table>
   {% for key, answer in vm['prefs']['적용']['_answers'].items() %}
   <tr><td>{{ key }}</td><td>{{ answer }}</td>
@@ -124,9 +126,10 @@
 {% endif %}
 
 {# 목록 — 표시 문자열은 view.display() 가 정한 것을 꽂기만 한다 #}
-<h2>메인 — 계산할 수 있는 상품 {{ vm['progress']['main'] }}개</h2>
+<h2>계산할 수 있는 상품 {{ vm['progress']['main'] }}개</h2>
+<p class="notice">{{ vm['meta']['%p 설명'] }} · 우대조건은 조건을 채우면 금리를 더 주는 것입니다.</p>
 <table>
-  <tr><th>순</th><th>상품</th><th>세후</th><th>채널</th><th>남은 조건</th><th>층</th></tr>
+  <tr><th>순</th><th>상품</th><th>세후</th><th>가입 방법</th><th>남은 조건</th><th>계산 상태</th></tr>
   {% for r in rows %}
   <tr>
     <td class="mono">{{ loop.index }}</td>
@@ -141,8 +144,8 @@
   {% endfor %}
 </table>
 {% if vm['메인밖']['수'] %}
-<p class="notice">메인 밖 {{ vm['메인밖']['수'] }}개 —
-  {% for tier, n in vm['메인밖']['층별'].items() %}{{ tier }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}
+<p class="notice">계산할 수 없는 상품 {{ vm['메인밖']['수'] }}개 —
+  {% for tier, n in vm['메인밖']['층별_라벨'].items() %}{{ tier }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}
 </p>
 {% endif %}
 
@@ -150,8 +153,8 @@
 {% if vm['notices']['사유'] %}
 <h2>사유 — 이 문장을 꼭 읽으세요</h2>
 <table>
-  {% for code, text in vm['notices']['사유'] %}
-  <tr><td><span class="tag">{{ code }}</span></td><td>{{ text }}</td></tr>
+  {% for r in vm['notices']['사유'] %}
+  <tr><td><span class="tag">{{ r['라벨'] }}</span></td><td>{{ r['문장'] }}</td></tr>
   {% endfor %}
 </table>
 {% endif %}
@@ -159,6 +162,7 @@
 {# F1 비교 리포트 — 숫자 칸은 코드가 채운다 (`0036`) #}
 {% if reports %}
 <h2>이 숫자가 어디서 왔나</h2>
+<p class="notice">{{ vm['meta']['%p 설명'] }}</p>
 {% for rep in reports %}
 {% set st = rep['계단'] %}
 <details class="card" {% if loop.first %}open{% endif %}>
@@ -168,7 +172,7 @@
     <tr><td>기본금리</td><td>{{ '%.2f'|format(st['기본금리']) }}%</td></tr>
     <tr><td>+ 확실히 받는 우대</td><td>{{ '%+.2f'|format(st['확실히 받는 우대']) }}%p</td></tr>
     <tr><td>+ 불확실한 우대</td><td>{{ '%+.2f'|format(st['불확실한 우대']) }}%p
-        <span class="notice">안 답한 조건 · 중복 적용 불명분</span></td></tr>
+        <span class="notice">아직 안 답한 조건 · 중복 적용이 불분명한 몫</span></td></tr>
     <tr><td>= 세전</td><td>{{ '%.2f'|format(st['세전 범위'][0]) }} ~ {{ '%.2f'|format(st['세전 범위'][1]) }}%</td></tr>
     {% if st['상한에 걸렸나'] %}
     <tr><td></td><td class="warn">공시 최고금리 {{ '%.2f'|format(st['공시 최고금리']) }}% 로 상한</td></tr>
@@ -194,9 +198,9 @@
   <p><b>{{ 제목 }}</b></p>
   <table>
     {% for it in 목록 %}
-    <tr><td>{{ it['type'] }}</td><td class="mono">{{ '%+.2f'|format(it['pp']) }}%p</td>
+    <tr><td>{{ it['이름'] }}</td><td class="mono">{{ '%+.2f'|format(it['pp']) }}%p</td>
         <td>{{ it['evidence'] }}
-          {% if it['group'] %}<span class="tag">배타그룹 {{ it['group'] }}</span>{% endif %}
+          {% if it['group'] %}<span class="tag">함께 받을 수 없음 ({{ it['group'] }})</span>{% endif %}
           {% if it['threshold'] %}<span class="tag">금액·횟수 조건</span>{% endif %}
         </td></tr>
     {% endfor %}

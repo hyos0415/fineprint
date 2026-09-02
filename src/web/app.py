@@ -63,7 +63,7 @@ import render as RENDER  # noqa: E402  — 웹 렌더러 (같은 디렉터리)
 
 app = FastAPI(
     title="FINeprint",
-    description="내 상황과 내 선호에 맞는 예금·적금을 골라준다 — 화면 계약 A1~A13 을 "
+    description="내 상황과 내 선호에 맞는 예금·적금을 골라준다 — 화면 계약 A1~A14 를 "
                 "지키는 뷰 모델을 낸다. 계산은 파이썬 한 벌뿐이다.",
     version="0.1.0",
 )
@@ -163,7 +163,8 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
     if not rows:
         raise HTTPException(
             status_code=400,
-            detail=f"스코프에 맞는 상품이 없다 (기관={req.company} 상품군={req.kinds})")
+            detail=f"찾는 범위에 맞는 상품이 없습니다 "
+                   f"(은행={req.company} · 예금/적금={req.kinds})")
     # 상태 키 판정은 `calculate.is_state_key()` 한 곳에서 한다 — 복사하면 갈라진다
     unknown = [k for k in req.state if not C.is_state_key(k)]
     if unknown:
@@ -176,14 +177,14 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
         if not isinstance(banks, list) or not all(isinstance(b, str) for b in banks):
             raise HTTPException(
                 status_code=400,
-                detail=f"{C.TRADED_KEY} 는 기관 이름의 목록이어야 한다 (또는 \"모름\")")
+                detail=f"{C.TRADED_KEY} 는 은행 이름의 목록이어야 한다 (또는 \"모름\")")
 
     bad_banks = C.unknown_banks(req.state, rows)
     if bad_banks:
         raise HTTPException(
             status_code=400,
-            detail=f"후보에 없는 기관이다: {bad_banks} — 목록에 없는 이름을 그냥 두면 "
-                   f"'거래하지 않은 기관' 으로 유도된다")
+            detail=f"후보에 없는 은행이다: {bad_banks} — 목록에 없는 이름을 그냥 두면 "
+                   f"'거래하지 않은 은행' 으로 유도된다")
 
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
