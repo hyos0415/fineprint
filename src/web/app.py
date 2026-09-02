@@ -38,21 +38,28 @@
 """
 from __future__ import annotations
 
+import json
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src" / "analysis"))
+# `uvicorn src.web.app:app` 로 띄우면 이 디렉터리가 sys.path 에 없다 — 넣어 준다
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
 import report as R  # noqa: E402
 import view as V  # noqa: E402
+
+import render as RENDER  # noqa: E402  — 웹 렌더러 (같은 디렉터리)
 
 app = FastAPI(
     title="FINeprint",
@@ -131,21 +138,27 @@ def screen(req: ScreenRequest) -> dict:
     엔드포인트가 하나뿐인 이유는 무상태이기 때문이다 — *"답 하나를 더 받는다" 가
     "답이 하나 더 들어간 state 로 다시 그린다" 와 같은 일*이다.
     """
+    vm, reports = _screen_payload(req)
+    return {**vm, "reports": reports}
+
+
+def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
+    """뷰 모델과 리포트를 만든다. **API 와 화면이 같은 것을 쓴다.**
+
+    `/api/screen` 과 `POST /screen`(HTML)이 이 함수를 공유하므로 둘이 갈라질 자리가
+    없다 — `0035` 가 찾은 실패("문구가 두 곳에 있었다")를 구조로 막는다.
+    """
     rows_all, by_pair = load(req.snapshot, req.group, req.term)
     tax = C.load_tax()
-
     try:
         prefs = P.parse(req.prefs)
     except SystemExit as e:
         raise HTTPException(status_code=400, detail=f"선호를 읽을 수 없다: {e}") from e
-
     rows = C.scope_rows(rows_all, req.company, req.kinds)
     if not rows:
         raise HTTPException(
             status_code=400,
             detail=f"스코프에 맞는 상품이 없다 (기관={req.company} 상품군={req.kinds})")
-
-    # 답에 모르는 조건 유형이 오면 **거른다** — 클라이언트를 믿지 않는다(무상태의 대가)
     unknown = [k for k in req.state
                if k not in C.CONDITION_TYPES
                and not (k.rpartition("_")[2] in ("금액", "횟수")
@@ -158,18 +171,105 @@ def screen(req: ScreenRequest) -> dict:
     scored = AB.score_all(rows, by_pair, req.state, tax)
     if prefs:
         P.annotate(scored, prefs)
-
-    # A7 — 스코프를 걸었으면 밖의 최고 금리를 같이 낸다 (`0028` S4)
     outside = (V.outside_best(rows_all, rows, by_pair, req.state, tax)
                if len(rows) < len(rows_all) else None)
     total_all = (C.questions_left(C.question_plan(rows_all, by_pair), {})
                  if len(rows) < len(rows_all) else None)
-
     vm = V.build(scored, plan, req.state, total, req.top, outside, total_all,
                  None, prefs)
-    return {**vm,
-            "reports": [R.build(s, i, prefs)
-                        for i, s in enumerate(vm["products"], 1)]}
+    reports = [R.build(s, i, prefs) for i, s in enumerate(vm["products"], 1)]
+    return vm, reports
+
+
+@app.get("/", response_class=HTMLResponse, summary="0단계 — 검색 축을 받는다")
+def start() -> str:
+    """폼이다. **자유 입력이 아니다** — 자유 입력(R2)은 `0042` 로 따로 정해 뒀고,
+    그때는 로컬 모델이 첫 수신자가 되어야 한다.
+    """
+    return RENDER.render_start()
+
+
+@app.post("/screen", response_class=HTMLResponse, summary="화면 하나 (HTML)")
+async def screen_html(request: Request) -> str:
+    """폼을 받아 화면을 그린다.
+
+    **폼을 표준 라이브러리로 파싱한다** — FastAPI 의 `Form(...)` 도 Starlette 의
+    `request.form()` 도 `python-multipart` 를 요구한다(urlencoded 에도 그렇다).
+    그런데 우리 폼은 **파일 업로드가 없는 `application/x-www-form-urlencoded`** 라
+    `urllib.parse.parse_qs` 다섯 줄로 끝난다. 의존성 하나를 위해 `requirements.txt` 에
+    다섯 번째 예외를 적을 이유가 없다(`0038` — 예외는 사유가 있어야 한다).
+
+    **PRG(POST-redirect-GET)를 쓰지 않는다** (이슈 #40 정정). PRG 는 새로고침 때 같은
+    **쓰기**가 두 번 일어나는 것을 막는 패턴인데 이 서버는 쓰기가 없다. 그리고 표준
+    PRG 는 리다이렉트 대상이 GET 이라 **상태가 URL 에 올라간다** — 급여이체·카드실적
+    같은 답이 URL 과 서버 로그에 남는 것을 피하려고 POST 를 고른 것이다.
+
+    **답은 서버에 저장하지 않는다** — `state_json` 으로 받아서 하나 더하고, 다음 화면의
+    hidden 으로 돌려보낸다 (`0040` 무상태).
+    """
+    f = await _form(request)
+
+    def get(name: str, default: str = "") -> str:
+        v = f.get(name, default)
+        return v if isinstance(v, str) else default
+
+    try:
+        state = json.loads(get("state_json", "{}") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="state 를 읽을 수 없다") from None
+    if not isinstance(state, dict):
+        raise HTTPException(status_code=400, detail="state 가 객체가 아니다")
+
+    # 답 하나를 더한다. **예/아니오/모름 셋뿐이다** (`0027`)
+    key, answer = get("answer_key"), get("answer")
+    if key and answer:
+        if answer not in ("예", "아니오", "모름"):
+            raise HTTPException(status_code=400, detail=f"모르는 답: {answer}")
+        state[key] = {"예": True, "아니오": False, "모름": C.UNSURE}[answer]
+
+    try:
+        term = int(get("term", "12") or 12)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="기간을 읽을 수 없다") from None
+
+    company, kinds = get("company"), get("kinds")
+    prefs_arg = get("prefs") or _prefs_from_form(f)
+    form = {"snapshot": get("snapshot", "20260826"), "group": get("group", "bank"),
+            "term": term, "company": company, "kinds": kinds, "prefs": prefs_arg,
+            "state_json": json.dumps(state, ensure_ascii=False)}
+    req = ScreenRequest(snapshot=form["snapshot"], group=form["group"], term=term,
+                        company=company or None, kinds=kinds or None,
+                        prefs=prefs_arg or None, top=10, state=state)
+    vm, reports = _screen_payload(req)
+    return RENDER.render_screen(vm, form, reports)
+
+
+async def _form(request: Request) -> dict[str, str]:
+    """`application/x-www-form-urlencoded` 본문을 표준 라이브러리로 읽는다.
+
+    같은 이름이 여러 번 오면 **마지막 값**을 쓴다 — 브라우저가 폼을 제출할 때의 순서다.
+    파일 업로드(multipart)는 다루지 않는다. 우리 폼에는 없다.
+    """
+    ctype = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" not in ctype:
+        raise HTTPException(status_code=415,
+                            detail=f"폼이 아니다 (content-type={ctype!r})")
+    raw = (await request.body()).decode("utf-8")
+    return {k: v[-1] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+
+
+def _prefs_from_form(f) -> str:
+    """0단계 폼의 `pref_*` 칸들을 `--prefs` 문자열로 모은다.
+
+    **고정 표의 답 문자열을 그대로 넘긴다** — 여기서 %p 로 바꾸지 않는다. 변환은
+    `prefs.parse()` 한 곳에서만 한다(`0030` — 표가 하나여야 화면과 정렬이 같은 값을 쓴다).
+    """
+    parts = []
+    for name in list(P.AXES) + [P.LIST_AXIS]:
+        v = f.get(f"pref_{name}")
+        if isinstance(v, str) and v.strip():
+            parts.append(f"{name}={v.strip()}")
+    return ",".join(parts)
 
 
 @app.get("/api/health", summary="살아 있나 · 무엇을 들고 있나")

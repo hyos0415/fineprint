@@ -163,25 +163,19 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
             move = " NEW"
         elif was != i:
             move = f" {was}->{i}"
-    if s["net_hi"] > s["net_lo"]:
-        left = f"남은 {s['n_unknown']}개"
-    elif s["n_unknown"]:
-        left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
-    else:
-        left = "확정"
-    note = ("  주의:" + "·".join(s["caveats"])) if s.get("caveats") else ""
+    # **표시 결정은 `view.display()` 가 한다** (F4-2) — 웹 템플릿도 같은 것을 읽는다.
+    # 여기서 따로 정하면 CLI 와 웹이 서로 다른 말을 하게 된다(`0035` 가 찾은 실패)
+    d = V.display(s)
+    left = d["남은"]
+    note = ("  주의:" + "·".join(d["주의"])) if d["주의"] else ""
     # 가입 채널 — 편의성 축 1번(이슈 #22). 선호 가중치(#24)가 들어오기 전까지는 표시만
     # 했다. 지금은 사용자가 `--prefs 영업점=...` 을 준 **그때만** 점수에 들어간다 —
     # 우리가 정한 값이 아니다(`problem.md` §6 · `0024` P2).
-    ch = f"  [{s['channel']}]" if s.get("channel") else ""
+    ch = f"  [{d['채널']}]" if d["채널"] else ""
     # 선호 조정 — **금리 칸이 아니라 별도 칸이다.** 점수를 금리처럼 보여주면 공시에
     # 없는 숫자를 사용자에게 보여주는 것이다 (`prereg-12` §3 · 화면 계약 A11).
-    adj = ""
-    if s.get("_blocked"):
-        adj = "  선호밖"
-    elif s.get("_adj"):
-        adj = f"  조정 {s['_adj']:+.2f}%p"
-    return (f"  {i:>2}. {s['name'][:24]:<25}{span(s):>15}{ch:<16}{left:<22}"
+    adj = f"  {d['조정']}" if d["조정"] else ""
+    return (f"  {i:>2}. {s['name'][:24]:<25}{d['범위']:>15}{ch:<16}{left:<22}"
             f"{adj}{move}{note}")
 
 

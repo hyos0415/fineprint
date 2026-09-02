@@ -1,0 +1,80 @@
+{# 0단계 — 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
+   조건 답은 여기서 안 받는다. 그건 질문 루프의 일이다 (`0016`·`0024` P5). #}
+{% extends "base.html" %}
+{% block title %}FINeprint — 시작{% endblock %}
+{% block body %}
+
+<h1>내 상황에 맞는 예금·적금 찾기</h1>
+<p class="notice">광고에 붙은 최고금리는 조건을 다 채웠을 때의 값입니다.
+  여기서는 <b>내가 실제로 받을 범위</b>를 보여주고, 못 채운 조건은 이유와 함께 냅니다.</p>
+
+{% if error %}
+<p class="card warn"><b>{{ error }}</b></p>
+{% endif %}
+
+<form method="post" action="/screen">
+  <h2>어디서 찾을까요</h2>
+  <div class="row">
+    <div>
+      <label for="group">권역</label>
+      <select id="group" name="group">
+        <option value="bank" {% if form.get('group','bank') == 'bank' %}selected{% endif %}>은행</option>
+        <option value="savingsbank" {% if form.get('group') == 'savingsbank' %}selected{% endif %}>저축은행</option>
+      </select>
+    </div>
+    <div>
+      <label for="term">가입 기간(개월)</label>
+      <select id="term" name="term">
+        {% for t in [6, 12, 24, 36] %}
+        <option value="{{ t }}" {% if form.get('term', 12)|int == t %}selected{% endif %}>{{ t }}개월</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="snapshot">공시 스냅샷</label>
+      <input id="snapshot" type="text" name="snapshot" value="{{ form.get('snapshot', '20260826') }}">
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="grow">
+      <label for="company">기관 좁히기 (선택 · 쉼표로 여럿)</label>
+      <input id="company" type="text" name="company" value="{{ form.get('company', '') }}"
+             placeholder="예: 우리,농협">
+    </div>
+    <div class="grow">
+      <label for="kinds">상품군 (선택)</label>
+      <input id="kinds" type="text" name="kinds" value="{{ form.get('kinds', '') }}"
+             placeholder="예금 또는 적금">
+    </div>
+  </div>
+  <p class="notice">좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
+
+  <h2>무엇을 중요하게 보시나요 <span class="notice">(선택 — 답한 것만 순서에 반영됩니다)</span></h2>
+  <p class="notice">가중치는 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
+  {% for key, axis in 축.items() %}
+  <div>
+    <label for="pref_{{ key }}">{{ axis['question'] }}</label>
+    <select id="pref_{{ key }}" name="pref_{{ key }}">
+      <option value="">— 답 안 함 —</option>
+      {% for choice, weight in axis['choices'].items() %}
+      <option value="{{ choice }}" {% if form.get('pref_' ~ key) == choice %}selected{% endif %}>
+        {{ choice }}{% if weight is number and weight != 0 %} ({{ '%+.2f'|format(weight) }}%p){% endif %}{% if weight is not number %} ({{ weight }}){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    <span class="notice">{{ axis['applies'] }}</span>
+  </div>
+  {% endfor %}
+  <div>
+    <label for="pref_list">{{ 목록축 }} (선택 · 가운뎃점으로 여럿)</label>
+    <input id="pref_list" type="text" name="pref_{{ 목록축 }}" value="{{ form.get('pref_' ~ 목록축, '') }}"
+           placeholder="예: 우리·농협">
+  </div>
+
+  <p style="margin-top:22px"><button class="primary" type="submit">목록 보기</button></p>
+</form>
+
+<p class="notice">이 화면은 금융감독원 공시를 계산한 결과입니다 —
+  상품을 판매·중개하지 않고, 특정 상품을 권하지 않습니다.</p>
+{% endblock %}

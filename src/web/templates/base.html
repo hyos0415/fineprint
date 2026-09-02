@@ -1,0 +1,47 @@
+{# 뼈대. 판정은 하지 않는다 — 이미 정해진 문자열을 꽂기만 한다 (`0038` 반증 조건) #}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}FINeprint{% endblock %}</title>
+<style>
+  :root { --line:#d8d8d8; --dim:#666; --warn:#8a4b00; --bg:#fff; --fg:#1a1a1a; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--bg); color:var(--fg);
+         font:15px/1.6 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  main { max-width: 940px; margin: 0 auto; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:28px 0 8px; }
+  .notice { color:var(--dim); font-size:13px; margin:2px 0; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:10px 0; }
+  .rate { font-size:18px; font-weight:600; white-space:nowrap; }
+  .row { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  .grow { flex:1 1 auto; min-width:180px; }
+  .tag { font-size:12px; color:var(--dim); border:1px solid var(--line);
+         border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  .warn { color:var(--warn); }
+  .bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:#4a7; }
+  .q { border:2px solid #333; border-radius:8px; padding:16px; margin:18px 0; }
+  .q blockquote { margin:8px 0; padding:8px 12px; border-left:3px solid var(--line);
+                  color:#333; background:#fafafa; white-space:pre-wrap; }
+  button { font:inherit; padding:8px 18px; border:1px solid #333; border-radius:6px;
+           background:#fff; cursor:pointer; }
+  button.primary { background:#1a1a1a; color:#fff; }
+  label { display:block; margin:10px 0 2px; font-size:13px; color:var(--dim); }
+  input[type=text], input[type=number], select { font:inherit; padding:6px 8px;
+           border:1px solid var(--line); border-radius:6px; min-width:220px; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  td, th { text-align:left; padding:6px 8px; border-bottom:1px solid #eee; vertical-align:top; }
+  .mono { font-variant-numeric: tabular-nums; }
+  details { margin:6px 0; }
+  summary { cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

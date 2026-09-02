@@ -423,4 +423,17 @@ KAG_LlamaIndex `docs/audit/00-comparison.md` §6의 Q1~Q4. 이관 시 다음과 
   관찰 도구는 층이 넷이고 새로 도입할 것이 없다(Langfuse · 엔진 `/metrics` · nvidia-smi ·
   프로파일러) (2026-09-01)
 
+- `0043-the-screen-decides-once-and-the-template-only-fills.md` — **표시 결정을 한 곳에
+  모으고 템플릿은 꽂기만 한다.** F4-2(화면 셋)를 만들면서 정한 것들이다. 상품 한 줄의
+  표시 결정(범위 문자열·남은 조건 라벨·선호 조정 문구)이 `ask_loop.product_line` 안에
+  있었는데, HTML 에서 다시 판정하면 **두 렌더러가 갈라진다** — `0035`(문구가 두 곳에
+  있었다)와 `0039`(검사가 렌더 대신 헬퍼를 봤다)가 같은 뿌리다. `view.display()` 로
+  옮기고 **CLI 가 그것을 읽게** 했다(회귀 0줄). **HTML 만드는 자리는 함수 하나** —
+  F4-3 의 렌더 겹 검사가 부를 자리가 있어야 한다. `/api/screen`(JSON)과 `POST /screen`
+  (HTML)이 같은 함수로 뷰 모델을 만든다. **`python-multipart` 를 안 넣었다** — FastAPI 의
+  `Form` 도 Starlette 의 `request.form()` 도 그것을 요구하는데(urlencoded 에도) 우리 폼은
+  `parse_qs` 다섯 줄이면 된다. **PRG 를 안 쓴다** — 쓰기가 없어 막을 것이 없고 표준
+  PRG 는 상태를 URL 에 올려 POST 를 고른 이유를 깬다. 웹 흐름을 끝까지 돌려 폼 hidden 이
+  이어지는 것과 A1·A4·A12·A13 이 화면에 있는 것을 확인했다 (2026-09-02)
+
 나머지 확정 항목(위 §이미 정해진 것)은 아직 정식 기록으로 옮기지 않았다.
