@@ -55,12 +55,12 @@
 
   <div class="row">
     <div class="grow">
-      <label for="company">기관 좁히기 (선택 · 쉼표로 여럿)</label>
+      <label for="company">은행 좁히기 (선택 · 쉼표로 여럿)</label>
       <input id="company" type="text" name="company" value="{{ form.get('company', '') }}"
              placeholder="예: 우리,농협">
     </div>
     <div class="grow">
-      <label for="kinds">상품군 (선택)</label>
+      <label for="kinds">예금 / 적금 (선택)</label>
       <input id="kinds" type="text" name="kinds" value="{{ form.get('kinds', '') }}"
              placeholder="예금 또는 적금">
     </div>
@@ -68,7 +68,7 @@
   <p class="notice">좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
 
   <h2>무엇을 중요하게 보시나요 <span class="notice">(선택 — 답한 것만 순서에 반영됩니다)</span></h2>
-  <p class="notice">가중치는 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
+  <p class="notice">여기 답한 것은 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
   {% for key, axis in 축.items() %}
   <div>
     <label for="pref_{{ key }}">{{ axis['question'] }}</label>

@@ -102,17 +102,23 @@ def build(s: dict, rank: int, prefs: dict | None = None) -> dict:
     order = {
         "rank": rank,
         "기준": "세후 가중합 순" if prefs else "세후 최대 금리 순",
-        "근거": "0030 — 사용자가 준 가중치" if prefs else "0017 — 다 채웠을 때 순",
+        # **결정 번호를 사용자 화면에 쓰지 않는다** (F5 · 이슈 #45). `0017`·`0030` 은
+        # 우리 기록의 좌표이고, 사용자에게는 *무엇을 기준으로 세웠나* 만 필요하다
+        "근거": ("답한 선호를 금리 차이로 옮겨 더한 값 순" if prefs
+                else "조건을 다 채웠을 때 받을 수 있는 금리 순"),
         "조정": s.get("_adj"),
         "조정 사유": s.get("_why") or [],
         "선호밖": bool(s.get("_blocked")),
     }
     return {
         "순위": rank,
+        "%p 설명": C.PP_NOTE,          # 남기고 설명만 붙이는 낱말 (F5 · 이슈 #45)
         "상품": s["name"],
-        "기관": s.get("company") or "",
+        "기관": C.org_label(s.get("company") or ""),      # 화면 표기 (F5)
         "채널": s.get("channel") or "",
-        "층": s["tier"],
+        # **층은 라벨로 담는다** (F5 · 이슈 #45). 원본 코드는 상품 dict 의 `tier` 에
+        # 그대로 있으므로 여기 또 담지 않는다 — 안 읽는 칸은 만들지 않는다(`0039`)
+        "층": C.tier_label(s["tier"]),
         "층 설명": s.get("message") or "",
         "계단": steps,
         "합_불일치": mismatch,
@@ -120,7 +126,8 @@ def build(s: dict, rank: int, prefs: dict | None = None) -> dict:
         "상품상한": s.get("cap"),
         "근거없는_%p": s.get("unexplained_pp") or 0.0,
         "조건": {"채운": why["met"], "못채운": why["unmet"], "안답한": why["unknown"]},
-        "사유": list(zip(s.get("caveats") or [], s.get("caveat_text") or [])),
+        "사유": [{"코드": c, "라벨": C.caveat_label(c), "문장": t}
+               for c, t in zip(s.get("caveats") or [], s.get("caveat_text") or [])],
         "정렬": order,
     }
 
@@ -134,10 +141,12 @@ def _conditions(title: str, items: list[dict], tail: str = "") -> list[str]:
         return [f"    {title}", "      (없음)"]
     out = [f"    {title}{tail}"]
     for it in items:
-        head = f"      {it['type']}  {_pp(it['pp'])}"
+        head = f"      {it['이름']}  {_pp(it['pp'])}"
         marks = []
         if it["group"]:
-            marks.append(f"배타그룹 {it['group']}")
+            # `배타그룹 g1` 은 우리 말이었다 (F5). 그룹 기호는 남긴다 — 같은 묶음끼리
+            # 짝이 보여야 사용자가 "이 둘 중 하나" 를 읽을 수 있다
+            marks.append(f"함께 받을 수 없음 ({it['group']})")
         if it["threshold"]:
             marks.append("금액·횟수 조건")
         if marks:
@@ -155,15 +164,16 @@ def render(rep: dict) -> str:
     rng = f"{lo:.2f}%" if abs(hi - lo) < 1e-9 else f"{lo:.2f} ~ {hi:.2f}%"
     ch = f"  [{rep['채널']}]" if rep["채널"] else ""
     out = [f"  {rep['순위']}위  {rep['상품']}  —  내가 받을 금리 {rng} (세후){ch}",
-           f"        {rep['기관']} · 층 {rep['층']}"
+           f"        {rep['기관']} · 계산 상태 {rep['층']}"
            + (f" — {rep['층 설명']}" if rep["층 설명"] else "")]
 
     out.append("")
     out.append("    이 숫자가 어디서 왔나")
+    out.append(f"      {rep['%p 설명']}")
     out.append(f"      기본금리                 {st['기본금리']:>7.2f}%")
     out.append(f"      + 확실히 받는 우대        {st['확실히 받는 우대']:>+7.2f}%p")
     out.append(f"      + 불확실한 우대           {st['불확실한 우대']:>+7.2f}%p"
-               "   (안 답한 조건 · 중복 적용 불명분)")
+               "   (아직 안 답한 조건 · 중복 적용이 불분명한 몫)")
     p_lo, p_hi = st["세전 범위"]
     p_rng = (f"{p_lo:.2f}%" if abs(p_hi - p_lo) < 1e-9
              else f"{p_lo:.2f} ~ {p_hi:.2f}%")
@@ -199,7 +209,7 @@ def render(rep: dict) -> str:
         out.append("        ※ 위 최대값은 **중복 우대가 다 된다고 본 값**이다 — 같은 "
                    "그룹에서 하나만 받게 되면 최대가 그만큼 낮아진다")
         out.append("           공시가 중복 적용 여부를 분명히 적지 않아 우리가 "
-                   "어느 쪽인지 못 정한다 (0022)")
+                   "어느 쪽인지 못 정한다")
 
     if abs(rep["근거없는_%p"]) > 1e-9:
         v = rep["근거없는_%p"]
@@ -219,8 +229,8 @@ def render(rep: dict) -> str:
     if rep["사유"]:
         out.append("")
         out.append("    주의")
-        for code, text in rep["사유"]:
-            out.append(f'      {code:<10}"{text}"')
+        for r in rep["사유"]:
+            out.append(f'      {r["라벨"]:<20}"{r["문장"]}"')
 
     o = rep["정렬"]
     out.append("")
