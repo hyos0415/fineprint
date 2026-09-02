@@ -121,7 +121,7 @@ def next_question(scored: list[dict], state: dict) -> tuple[str | None, dict | N
     `0039` 반증 조건이 *"칸을 늘리되 CLI 렌더러도 그 칸을 쓰게 한다"* 로 미리
     적어 둔 자리다.
     """
-    for key, slot in C.rank_questions(scored):
+    for key, slot in C.rank_questions(scored, state):
         if key not in state:
             return key, slot
     return None, None
@@ -144,13 +144,38 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
     문구 = [{"문구": ev,
             "기관": " · ".join(sorted(o for o in src.get(ev, set()) if o))}
            for ev in sorted(slot["evidence"])]
+    # **질문 문장을 뷰 모델이 만든다** (F6). 전에는 CLI 와 웹이 각자 만들었는데,
+    # 기관이 붙은 뒤로 그러면 한쪽이 *"자동이체 — 충족하십니까"* 라고만 물어
+    # **어느 은행 이야기인지 사라진다**. `0039` 가 막은 자리와 같은 모양이다.
+    기관 = key.partition("#")[0].partition("@")[2]
+    꼬리 = f" · {기관}" if 기관 else ""
+    if slot["unit"] == C.LIST_UNIT:                       # 목록 질문 (F6)
+        return {
+            "key": key,
+            "유형": slot["kind"],
+            "단위": slot["unit"],
+            "질문": "거래해 본 기관을 골라 주세요 — 여러 곳을 고를 수 있습니다",
+            "설명": "고르지 않은 기관은 첫거래로, 그 기관의 실적 조건은 "
+                    "'아니오' 로 채워집니다 — 거래가 없으면 실적이 있을 수 없습니다",
+            "문구": [],
+            "여는_상품수": len(slot["products"]),
+            "선택지": list(slot["기관"]),
+            "다중": True,
+        }
+    if "#" in key:
+        질문 = f"위는 공시 문구 원문입니다 — 충족하십니까? (조건 유형 {slot['kind']}{꼬리})"
+    else:
+        질문 = f"{slot['kind']}{꼬리} — 이 조건을 충족하십니까?"
     return {
         "key": key,
         "유형": slot["kind"],
         "단위": slot["unit"],
+        "질문": 질문,
+        "설명": "",
         "문구": 문구,
         "여는_상품수": len(slot["products"]),
         "선택지": ["예", "아니오", "모름"],
+        "다중": False,
     }
 
 
@@ -285,15 +310,30 @@ def check_model(vm: dict) -> list[dict]:
     if q["남은"] == 0 and cur is not None:
         hit("A6", "-", "남은 질문이 0인데 물을 질문이 담겼다")
     if cur is not None:
-        # **공시 문구가 있어야 한다** — 사용자가 판단할 근거다 (`0027`).
-        # 문구가 없는 조건은 `조건불명` 으로 질문이 안 만들어지므로 여기 오면 결함이다
-        if not cur["문구"]:
-            hit("A3", cur["key"], "물을 질문에 공시 문구가 없다")
-        # **문구에 기관이 붙어 있나** — 없으면 "당행" 이 가리킬 대상이 없다
-        for f in cur["문구"]:
-            if not f.get("기관"):
-                hit("A3", cur["key"],
-                    f'문구에 기관이 없다: "{f["문구"][:40]}…"')
-        if cur["선택지"] != ["예", "아니오", "모름"]:
-            hit("A3", cur["key"], f"선택지가 셋이 아니다: {cur['선택지']}")
+        if not cur.get("질문"):
+            hit("A3", cur["key"], "물을 질문에 질문 문장이 없다")
+        if cur["다중"]:
+            # **목록 질문** (F6) — 문구가 아니라 기관 목록이 선택지다. 무엇이 유도되는지
+            # 화면이 말해야 한다: 안 고른 기관의 답을 우리가 채우기 때문이다
+            if not cur["선택지"]:
+                hit("A3", cur["key"], "목록 질문에 고를 기관이 없다")
+            if not cur.get("설명"):
+                hit("A3", cur["key"], "목록 질문에 무엇이 유도되는지 설명이 없다")
+        else:
+            # **공시 문구가 있어야 한다** — 사용자가 판단할 근거다 (`0027`).
+            # 문구가 없는 조건은 `조건불명` 으로 질문이 안 만들어지므로 여기 오면 결함이다
+            if not cur["문구"]:
+                hit("A3", cur["key"], "물을 질문에 공시 문구가 없다")
+            # **문구에 기관이 붙어 있나** — 없으면 "당행" 이 가리킬 대상이 없다
+            for f in cur["문구"]:
+                if not f.get("기관"):
+                    hit("A3", cur["key"],
+                        f'문구에 기관이 없다: "{f["문구"][:40]}…"')
+            if cur["선택지"] != ["예", "아니오", "모름"]:
+                hit("A3", cur["key"], f"선택지가 셋이 아니다: {cur['선택지']}")
+            # **기관 상대 조건이면 어느 기관인지 질문에 있어야 한다** (F6) — 없으면
+            # 사용자가 "당행" 을 자기가 아는 은행으로 읽는다
+            기관 = cur["key"].partition("#")[0].partition("@")[2]
+            if 기관 and 기관 not in cur["질문"]:
+                hit("A3", cur["key"], f"질문에 기관({기관})이 없다: {cur['질문']}")
     return bad

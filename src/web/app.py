@@ -168,6 +168,22 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
     unknown = [k for k in req.state if not C.is_state_key(k)]
     if unknown:
         raise HTTPException(status_code=400, detail=f"모르는 조건 유형: {unknown}")
+    # 목록 답만 모양이 다르다 (F6) — 기관 이름의 리스트이거나 "모름" 이다.
+    # **여기서 안 막으면 `answer_of()` 가 문자열을 기관 목록으로 읽는다** —
+    # `"국민은행" in "국민은행"` 이 참이라 조용히 엉뚱한 판정이 된다
+    banks = req.state.get(C.TRADED_KEY)
+    if banks is not None and banks != C.UNSURE:
+        if not isinstance(banks, list) or not all(isinstance(b, str) for b in banks):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{C.TRADED_KEY} 는 기관 이름의 목록이어야 한다 (또는 \"모름\")")
+
+    bad_banks = C.unknown_banks(req.state, rows)
+    if bad_banks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"후보에 없는 기관이다: {bad_banks} — 목록에 없는 이름을 그냥 두면 "
+                   f"'거래하지 않은 기관' 으로 유도된다")
 
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
@@ -210,7 +226,8 @@ async def screen_html(request: Request) -> str:
     **답은 서버에 저장하지 않는다** — `state_json` 으로 받아서 하나 더하고, 다음 화면의
     hidden 으로 돌려보낸다 (`0040` 무상태).
     """
-    f = await _form(request)
+    multi = await _form(request)
+    f = _flat(multi)
     # **HTML 경로는 어떤 오류든 HTML 로 답한다.** 사람 완주 2런에서 날 JSON 을 봤다 —
     # `{"detail": "모르는 조건 유형: [...]"}` 가 화면에 그대로 나왔다.
     #
@@ -221,13 +238,13 @@ async def screen_html(request: Request) -> str:
     # 에러 계약이 `/api/screen`(JSON)과 `POST /screen`(HTML)에서 다르다 —
     # 같은 함수를 쓰되 **답하는 모양만** 갈라진다.
     try:
-        return _screen_from_form(f)
+        return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
         return HTMLResponse(RENDER.render_start(f, str(e.detail)),
                             status_code=e.status_code)
 
 
-def _screen_from_form(f: dict[str, str]) -> str:
+def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) -> str:
     """폼 하나를 화면 하나로. **오류는 그냥 던진다** — HTML 로 바꾸는 것은 위에서 한다."""
 
     def get(name: str, default: str = "") -> str:
@@ -241,9 +258,19 @@ def _screen_from_form(f: dict[str, str]) -> str:
     if not isinstance(state, dict):
         raise HTTPException(status_code=400, detail="state 가 객체가 아니다")
 
-    # 답 하나를 더한다. **예/아니오/모름 셋뿐이다** (`0027`)
+    # 답 하나를 더한다. **예/아니오/모름 셋뿐이다** (`0027`) — 목록 질문만 예외다(F6)
     key, answer = get("answer_key"), get("answer")
-    if key and answer:
+    if key == C.TRADED_KEY and answer:
+        # 체크한 기관들이 답이다. **하나도 안 고른 것도 답이다** ("거래한 곳이 없다").
+        # 고른 기관이 후보에 없는 이름이면 막는다 — 조용히 무시하면 사용자가 고른 것과
+        # 계산에 들어간 것이 달라진다
+        if answer == "모름":
+            state[key] = C.UNSURE
+        elif answer != "고름":
+            raise HTTPException(status_code=400, detail=f"모르는 답: {answer}")
+        else:
+            state[key] = list(dict.fromkeys(picked_banks or []))
+    elif key and answer:
         if answer not in ("예", "아니오", "모름"):
             raise HTTPException(status_code=400, detail=f"모르는 답: {answer}")
         state[key] = {"예": True, "아니오": False, "모름": C.UNSURE}[answer]
@@ -270,18 +297,24 @@ def _screen_from_form(f: dict[str, str]) -> str:
     return RENDER.render_screen(vm, form, reports)
 
 
-async def _form(request: Request) -> dict[str, str]:
+async def _form(request: Request) -> dict[str, list[str]]:
     """`application/x-www-form-urlencoded` 본문을 표준 라이브러리로 읽는다.
 
-    같은 이름이 여러 번 오면 **마지막 값**을 쓴다 — 브라우저가 폼을 제출할 때의 순서다.
-    파일 업로드(multipart)는 다루지 않는다. 우리 폼에는 없다.
+    **값을 리스트로 돌려준다** — 목록 질문(F6)의 체크박스가 같은 이름을 여러 번
+    보내기 때문이다. 나머지 칸은 `_flat()` 이 마지막 값 하나로 줄인다(브라우저가 폼을
+    제출할 때의 순서다). 파일 업로드(multipart)는 다루지 않는다. 우리 폼에는 없다.
     """
     ctype = request.headers.get("content-type", "")
     if "application/x-www-form-urlencoded" not in ctype:
         raise HTTPException(status_code=415,
                             detail=f"폼이 아니다 (content-type={ctype!r})")
     raw = (await request.body()).decode("utf-8")
-    return {k: v[-1] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+    return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
+
+def _flat(multi: dict[str, list[str]]) -> dict[str, str]:
+    """반복 필드를 마지막 값 하나로. 화면이 다시 실어 보낼 칸들은 전부 단일 값이다."""
+    return {k: v[-1] for k, v in multi.items()}
 
 
 def _prefs_from_form(f) -> str:

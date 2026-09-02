@@ -302,6 +302,20 @@ def pick_answer(slot: dict, rng: random.Random | None, persona: str | None) -> t
     `prereg-10` 뒤로 유형 질문과 문구 질문이 같은 모양이라 답은 셋뿐이다 —
     수치 경로가 사라졌다.
     """
+    if slot.get("unit") == C.LIST_UNIT:              # 목록 질문 (F6 · `prereg-15`)
+        banks = slot.get("기관") or []
+        if persona:
+            # **예 = 전 기관과 거래한다** — 유도가 하나도 안 걸려 질문이 가장 많은 경로다.
+            # **아니오 = 거래한 곳이 없다** — 전부 유도되어 가장 적은 경로다.
+            # 검사가 두 극단을 다 걷는다
+            return {"예": (",".join(banks), "list"),
+                    "아니오": ("없음", "list"),
+                    "모름": ("모름", "unsure")}[persona]
+        assert rng is not None
+        if rng.random() < 1 / 3:
+            return "모름", "unsure"                  # 유도를 안 쓰는 경로도 걷는다
+        picked = [b for b in banks if rng.random() < 0.3]
+        return (",".join(picked) if picked else "없음"), "list"
     if persona:
         return {"예": ("예", "yes"), "아니오": ("아니오", "no"),
                 "모름": ("모름", "unsure")}[persona]
@@ -381,7 +395,8 @@ def walk(rows: list[dict], by_pair: dict, plan: dict, total: int, tax: dict,
             bad.append({"assert": "A6", "product": "-", "session": tag, "step": step,
                         "detail": f"화면의 '답한 질문' {st['answered']} ≠ 실제 답한 수 {step}"})
         prev_left = st["left"]
-        ordered = [(k, s) for k, s in C.rank_questions(scored) if k not in state]
+        ordered = [(k, s) for k, s in C.rank_questions(scored, state)
+                   if k not in state]
         if not ordered:
             break
         key, slot = ordered[0]
@@ -421,10 +436,18 @@ def run(stamp: str, group: str, term: int, seeds: int,
     t0 = time.monotonic()
     bad, n_states = [], 0
     # 비교 리포트(F1) — 네 상태에서 렌더 구조를 본다 (이슈 #33)
+    # **목록 키는 모양이 다르다** (F6) — 기관 목록이거나 "모름" 이다. 여기에 `True` 를
+    # 넣으면 `answer_of()` 가 기관을 목록에서 찾다가 터진다
+    banks_all = sorted({r.get("company") or "" for r in rows if r.get("company")})
+    def _st(v, banks):
+        s = {k: v for k in plan if k != C.TRADED_KEY}
+        if C.TRADED_KEY in plan:
+            s[C.TRADED_KEY] = banks
+        return s
     for tag, st0 in (("리포트·미응답", {}),
-                     ("리포트·전부예", {k: True for k in plan}),
-                     ("리포트·전부아니오", {k: False for k in plan}),
-                     ("리포트·전부모름", {k: C.UNSURE for k in plan})):
+                     ("리포트·전부예", _st(True, banks_all)),
+                     ("리포트·전부아니오", _st(False, [])),
+                     ("리포트·전부모름", _st(C.UNSURE, C.UNSURE))):
         scored0 = AB.score_all(rows, by_pair, st0, tax)
         if prefs:
             P.annotate(scored0, prefs)

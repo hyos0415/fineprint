@@ -23,6 +23,7 @@
     python src/analysis/ask_loop.py 20260826 --group bank --term 12
     python src/analysis/ask_loop.py 20260826 --auto 예            # 사람 없이 전부 "예"
     python src/analysis/ask_loop.py 20260826 --answers 예,아니오,모름
+    python src/analysis/ask_loop.py 20260826 --answers "국민은행|신한은행,예,예"   # 목록 답
     python src/analysis/ask_loop.py 20260826 --company 우리 --kind 적금   # 후보 집합
     python src/analysis/ask_loop.py 20260826 --prefs 확실성=많이         # 선호 가중치
     python src/analysis/ask_loop.py 20260826 --survey                  # 설문 문항만 본다
@@ -42,7 +43,11 @@ import view as V  # noqa: E402  — 뷰 모델. `view` 는 `ask_loop` 을 함수
 import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
 
-MAX_STEPS = 80          # 무한 루프 방어. 실제 질문 수는 은행권 22 · 저축은행 27 이다
+# 무한 루프 방어. **F6 이 이 값을 넘겼다** — 조건을 기관별로 가르니 "전 기관과
+# 거래한다" 는 페르소나의 질문이 은행권 84개가 되어, 옛 값 80 에서 루프가 잘렸는데
+# 화면은 **"완주"** 라고 적었다(남은 질문 4개인 채로). 방어값이 지표를 조용히
+# 바꾸는 자리였다. 실측 상한은 은행권 90 · 저축은행 45 다
+MAX_STEPS = 400
 
 # 답을 읽는 표 — 한글과 영문 약자를 둘 다 받는다.
 # **약자를 넣은 이유는 콘솔 인코딩이다.** Windows 터미널에서 한글 입력이 깨지는 환경이
@@ -74,6 +79,50 @@ def parse_number(raw: str, unit: str) -> float | None:
     suffix = (m.group(2) or "원").replace("억", "억원").replace("만", "만원")
     suffix = suffix.replace("천", "천원").replace("원원", "원")
     return n * C.MONEY_UNIT.get(suffix, 1)
+
+
+# ── 목록 질문의 답 (F6 · `prereg-15`)
+#
+# **답 셋(예/아니오/모름)의 유일한 예외다** (`0027`). 기관 상대 조건을 기관마다
+# 예/아니오로 물으면 은행권에서 56개가 되는데, 목록 하나로 물으면 안 고른 기관이
+# 전부 유도되어 거래 은행 1곳 사용자는 16개로 끝난다.
+#
+# **"모름" 은 남긴다.** 목록을 안 고르면 유도가 안 걸리고 기관 상대 조건이 기관마다
+# 질문으로 나간다 — 질문은 늘지만 우리가 사용자 대신 정하지는 않는다(`0016`).
+NONE_IN = {"없음", "없다", "-", "0", "none"}
+
+
+def parse_banks(raw: str, banks: list[str]) -> list[str] | None:
+    """`"1,3"` · `"국민은행|케이뱅크"` · `"없음"` 을 기관 목록으로. 못 읽으면 None.
+
+    번호와 이름을 둘 다 받는다 — 번호는 한글 입력이 깨지는 콘솔을 위한 것이고
+    (`YES`/`NO` 약자와 같은 이유), 이름은 화면에서 그대로 옮겨 적는 사용자를 위한 것이다.
+
+    **구분자로 `|` 도 받는다.** `--answers` 가 이미 쉼표로 답을 가르기 때문에, 대본으로
+    기관 여럿을 주려면 쉼표가 아닌 구분자가 하나 필요하다 — 없으면 대본이 목록 질문에
+    한 곳만 줄 수 있고 회귀를 그 경로로 못 돌린다.
+    """
+    text = raw.strip().replace("|", ",")
+    if text.lower() in NONE_IN:
+        return []
+    out: list[str] = []
+    for tok in text.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok.isdigit():
+            i = int(tok)
+            if not 1 <= i <= len(banks):
+                return None
+            pick = banks[i - 1]
+        else:
+            hit = [b for b in banks if b == tok] or [b for b in banks if tok in b]
+            if len(hit) != 1:
+                return None            # 없거나 여럿이면 **추측하지 않는다**
+            pick = hit[0]
+        if pick not in out:
+            out.append(pick)
+    return out
 
 
 def fmt_need(value: float, unit: str) -> str:
@@ -343,9 +392,17 @@ def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
     문구를 **자르지 않는다.** 질문 문장을 자르면 조건이 달라진다.
     """
     # **웹과 같은 카드를 읽는다** (`0039` 반증 조건 1 — 한쪽만 쓰는 칸을 만들지 않는다).
-    # 그래서 기관도 여기 같이 나온다
+    # 그래서 기관도, 질문 문장도 여기 같이 나온다
     card = V.question_card(key, slot)
     문구 = card["문구"] if card else []
+
+    if card and card["다중"]:                       # 목록 질문 (F6)
+        banks = card["선택지"]
+        lines = [f"      {card['설명']}"]
+        for i, b in enumerate(banks, 1):
+            lines.append(f"      {i:>2}. {b}")
+        lines.append("      번호나 이름을 쉼표로 여럿 · [없음] · [모름] · [그만]")
+        return card["질문"], lines
 
     def _quote(f: dict, cut: int | None = None) -> str:
         """기관 — 문구. 기관이 없으면 문구만."""
@@ -354,10 +411,9 @@ def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
 
     if "#" in key:                             # 문구 단위 질문
         head = _quote(문구[0]) if 문구 else "(문구 없음)"
-        lines = [f"      위는 공시 문구 원문입니다 — 충족하십니까? "
-                 f"(조건 유형 {slot['kind']})"]
+        lines = [f"      {card['질문']}"]
     else:                                      # 조건 유형 질문
-        head = f"{key} — 이 조건을 충족하십니까?"
+        head = card["질문"]
         lines = [f"      공시 문구  {_quote(f, 74)}" for f in 문구[:3]]
     return head, lines + ["      [예] [아니오] [모름] · [그만]"]
 
@@ -370,6 +426,9 @@ def bad_answer_hint(slot: dict, kind: str) -> str:
     세 번 넣고 같은 거절을 세 번 받은 뒤 사실과 다른 `아니오` 로 답했다(`prereg-09` §8).
     `prereg-10` 이 수치 질문 자체를 없앴으므로 이제 답은 셋뿐이다.
     """
+    if slot.get("unit") == C.LIST_UNIT:
+        return ("      못 읽었습니다. 위 번호나 기관 이름을 쉼표로 적어 주세요 "
+                "(거래한 곳이 없으면 '없음')")
     if kind == "number":
         return ("      숫자로는 판정하지 않습니다 — 위 문구를 충족하시는지 "
                 "[예] [아니오] [모름] 으로 답해 주세요")
@@ -384,7 +443,16 @@ def read_answer(scripted: list[str] | None, auto: str | None,
     숫자를 넣은 사용자에게 "문구에 예/아니오로 답해 주세요" 라고 말해야 한다.
     숫자를 조용히 "예" 로 받으면 사용자가 하지 않은 답을 우리가 만든 것이 된다.
     """
+    목록 = slot.get("unit") == C.LIST_UNIT
     if auto:                                   # 사람 없이 도는 모드 — 회귀 확인용
+        if 목록:
+            # 페르소나를 목록 질문으로 옮긴다 — **예는 "전부 거래했다"** 다.
+            # 그러면 유도가 하나도 안 걸려 질문이 가장 많은 경로가 되고, 아니오는
+            # 가장 적은 경로가 된다. 검사가 두 극단을 다 걷는다
+            banks = slot.get("기관") or []
+            return ({"예": (",".join(banks), "list"),
+                     "아니오": ("없음", "list"),
+                     "모름": ("모름", "unsure")}[auto])
         return {"예": ("예", "yes"), "아니오": ("아니오", "no"),
                 "모름": ("모름", "unsure")}[auto]
     if scripted is not None:
@@ -400,6 +468,11 @@ def read_answer(scripted: list[str] | None, auto: str | None,
     low = raw.lower()
     if low in QUIT:
         return raw, "quit"
+    if 목록:                                    # 목록 질문 — 예/아니오가 아니다 (F6)
+        if low in UNSURE_IN:
+            return raw, "unsure"
+        return raw, ("list" if parse_banks(raw, slot.get("기관") or []) is not None
+                     else "bad")
     if low in MAXOUT or low in YES:            # `최대` 는 옛 대본 호환 — 이제 그냥 예다
         return raw, "yes"
     if low in NO:
@@ -417,7 +490,12 @@ def apply_answer(state: dict, key: str, slot: dict, raw: str, kind: str) -> str:
     `prereg-10` 뒤로 유형 질문과 문구 질문이 **같은 모양**이다 — 셋 중 하나로 답하고,
     유형에 "아니오"·"모름" 이면 그 유형의 문구 질문이 전부 사라진다(`0024` P4).
     """
-    if kind == "yes":
+    if kind == "list":                              # 목록 질문 (F6)
+        picked = parse_banks(raw, slot.get("기관") or [])
+        if picked is None:
+            return "bad"
+        state[key] = picked
+    elif kind == "yes":
         state[key] = True
     elif kind == "no":
         state[key] = False
@@ -482,6 +560,9 @@ def run(stamp: str, group: str, term: int, top: int,
         # 여기서 따로 골랐더니 웹이 붙는 순간 순서 규칙이 두 군데가 됐다
         key, slot = V.next_question(scored, state)
         if key is None:
+            break
+        if step == MAX_STEPS:                  # 방어값에 닿았다 — **완주가 아니다**
+            quit_at, quit_why = step, f"방어값 MAX_STEPS={MAX_STEPS} 에 닿았다"
             break
         head, lines = prompt_for(key, slot)
         print(f"\n  [{step}] {head}")

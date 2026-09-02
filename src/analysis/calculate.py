@@ -67,6 +67,44 @@ ALWAYS_MET = {"무조건_특판_이벤트"}      # 가입고객 모두에게 적
 UNCLEAR_TYPE = "조건불명_공시미기재"
 UNDECIDABLE = {"판정불가_불특정", UNCLEAR_TYPE}   # 물어도 판정할 수 없다
 
+# ── 조건은 **기관별로 갈린다** (F6 · `prereg-15` · 이슈 #44)
+#
+# **왜 고쳤나 — 지금까지 불가능한 것을 참이라고 말했다.** 사용자의 답이 기관과 무관한
+# 전역 값이라, 답 하나가 여러 기관 상품을 한꺼번에 올렸다(`자동이체` 하나 → 상품 22개 ·
+# 기관 10곳). "주거래" 는 *그 은행과* 거래가 있다는 뜻인데 한 사람이 8개 은행에서
+# 동시에 주거래일 수 없다.
+#
+# 더 나쁜 것은 **논리적으로 불가능한 조합**이었다 — 애큐온 처음만난적금이
+# `첫거래 +3.50%p · 주거래 +2.00%p` 인데 둘 다 줘서 +5.50%p 를 다 냈다.
+# `problem.md` 가 인용한 피해 사례(*"최고금리 10%를 보고 가입했는데 못 받았다"*)를
+# 우리가 작은 규모로 재생산한 것이다.
+#
+# **유형 분류는 사람이 확정했다** (`prereg-15` §1 · 2026-09-02). 기준은
+# *"그 은행과의 관계·실적이냐"* 다. `잔액_평잔_가입금액` 은 문구를 전부 읽어 보니
+# 그 은행 예치금과 이 상품 가입금액이 **섞여 있어서** 기관 무관에 뒀다 — 기관 상대로
+# 두면 거래 없는 은행의 가입금액 문구까지 막힌다(`prereg-15` §1.1).
+INSTITUTION_RELATIVE = {
+    "첫거래_신규고객",          # 그 은행 거래 이력이 **없어야** 한다
+    "주거래_장기거래_재예치",     # 그 은행과 거래가 **있어야** 한다
+    "급여_연금이체",            # 그 은행 계좌로 급여
+    "카드실적",                # 그 은행 카드 실적
+    "자동이체",                # 그 은행 계좌에서 자동이체
+    "타상품_보유동시가입",       # 그 은행의 다른 상품
+}
+FIRST_DEAL = "첫거래_신규고객"
+MAIN_DEAL = "주거래_장기거래_재예치"
+
+# 목록 질문 — *"거래해 본 은행을 골라주세요"*. 답 하나가 나머지를 유도한다.
+#
+# **이것만 예/아니오/모름이 아니다** (`0027` 의 예외). 기관 상대 조건을 기관마다
+# 예/아니오로 물으면 은행권에서 56개가 되는데, 목록 하나로 물으면 안 고른 은행이
+# **전부 유도**되어 거래 은행 1곳 사용자는 16개로 끝난다. 답은 여전히 사용자가 준다 —
+# 우리가 추측하는 것이 아니라 **사용자가 이미 준 답에서 논리적으로 따라 나오는 것**만
+# 채운다(`0016`).
+TRADED_KEY = "_거래은행"
+LIST_UNIT = "목록"
+LIST_KIND = "거래해 본 기관"
+
 # ── 금액·횟수 임계 (A안 · `../../docs/spec/prereg-06-matching-and-judgment.md` §1.3)
 #
 # 조건에 "3천만원 이상" · "6회 이상" 같은 임계가 붙어 있으면, 사용자가 "O" 라고
@@ -221,20 +259,105 @@ def is_state_key(key: str) -> bool:
 
     `0039` 가 정한 것과 같은 자리다 — **한쪽만 쓰는 규칙을 만들지 않는다.**
     """
-    if key in CONDITION_TYPES:
+    if key == TRADED_KEY:                     # 거래해 본 기관 목록 (F6)
         return True
     base, sep, _hash = key.partition("#")
+    kind, at, _co = base.partition("@")
     if sep:                                   # 문구 단위 — 앞부분이 조건 유형이어야 한다
-        return base in CONDITION_TYPES
+        return kind in CONDITION_TYPES
+    if at:                                    # 기관이 붙은 유형 키 (F6)
+        return kind in INSTITUTION_RELATIVE
+    if key in CONDITION_TYPES:
+        return True
     head, _, tail = key.rpartition("_")       # 수치 후속
     return tail in ("금액", "횟수") and head in CONDITION_TYPES
 
 
 def clause_key(item: dict) -> str:
-    """`카드실적#a3f1c2d9` — 조건 유형 + 근거 문구 해시."""
+    """`카드실적@국민은행#a3f1c2d9` — 조건 유형 + **기관** + 근거 문구 해시.
+
+    **기관을 넣은 이유는 같은 문구를 두 기관이 쓰기 때문이다** (`prereg-15` §1.2).
+    실측으로 은행권 문구 단위 키 209개 중 1개(0.5%)가 그랬다
+    (`급여_연금이체#deb3d786` — 국민은행·케이뱅크). 저축은행은 133개 중 0개다.
+    **작지만 기관별로 갈리는 것을 안 가른 것과 같은 결함**이라 키에서 없앤다.
+
+    기관 상대 유형이 아니어도 붙인다 — 문구는 상품 행에서 왔고 그 행에 기관이 하나뿐이다.
+    """
     ev = re.sub(r"\s+", " ", (item.get("evidence") or "")).strip()
     h = hashlib.blake2s(ev.encode("utf-8"), digest_size=CLAUSE_HASH_BYTES).hexdigest()
-    return f"{item.get('condition_type')}#{h}"
+    return f"{type_key(item.get('condition_type') or '', item.get('_기관') or '', force=True)}#{h}"
+
+
+def type_key(kind: str, company: str, force: bool = False) -> str:
+    """조건 유형의 **상태 키**. 기관 상대 유형이면 기관을 붙인다.
+
+    `force` 는 문구 단위 키 전용이다 — 문구는 유형과 무관하게 기관 하나에 붙는다.
+    """
+    if company and (force or kind in INSTITUTION_RELATIVE):
+        return f"{kind}@{company}"
+    return kind
+
+
+def traded_banks(state: dict):
+    """사용자가 *"거래해 본"* 이라고 고른 기관들. 아직 안 물었으면 None.
+
+    모양이 틀린 값(불리언 등)은 **안 물어본 것으로 본다.** 문자열을 그대로 쓰면
+    `"국민은행" in "국민은행저축은행"` 이 참이라 조용히 엉뚱한 판정이 된다.
+    """
+    banks = state.get(TRADED_KEY)
+    if banks is None or banks == UNSURE or isinstance(banks, list):
+        return banks
+    return None
+
+
+def unknown_banks(state: dict, rows: list[dict]) -> list[str]:
+    """목록 답에 **후보에 없는 기관**이 있나. 있으면 그 이름들을 낸다 (F6).
+
+    **한 곳에서만 판정한다** — CLI 의 `--banks` 와 웹 요청이 각자 검증하면 한쪽만
+    고치게 된다(`0039` 가 정한 것과 같은 자리). 조용히 무시하면 **사용자가 고른 것과
+    계산에 들어간 것이 달라진다** — 안 고른 것으로 처리되어 그 기관의 실적 조건이
+    "아니오" 로 유도된다.
+    """
+    banks = traded_banks(state)
+    if not isinstance(banks, list):
+        return []
+    known = {r.get("company") or "" for r in rows}
+    return [b for b in banks if b not in known]
+
+
+def answer_of(kind: str, company: str, state: dict):
+    """이 기관에서 이 조건 유형의 답. **유도된 답까지 포함한다** (F6 · `prereg-15` §1).
+
+    유도는 둘뿐이고 **둘 다 사용자가 이미 준 답에서 논리적으로 따라 나온다.**
+    추측이 아니다(`0016`) — 우리가 모르는 것을 채우는 게 아니라, 사용자가 말한 것의
+    필연적 귀결을 두 번 묻지 않는 것이다.
+
+    ```
+    ① 목록에 없는 기관     첫거래 = 예 · 나머지 실적 조건 전부 아니오
+                        **거래가 없으면 그 은행에 실적이 있을 수 없다**
+    ② 한 기관 안에서       첫거래 = 예  →  주거래 = 아니오
+                        주거래 = 예  →  첫거래 = 아니오
+                        신규이면서 동시에 주거래일 수 없다 (이슈 #44)
+    ```
+
+    **목록에 있는 기관의 첫거래는 되묻는다.** 공시 문구가 *"당행 예금 최초 가입"*
+    처럼 상품군까지 좁히는 경우가 있어서, 그 은행과 거래가 있어도 참일 수 있다.
+    *"거래해 본"* 의 뜻은 사용자가 정한다(`prereg-15` §4) — 우리가 좁히지 않는다.
+    """
+    if kind not in INSTITUTION_RELATIVE or not company:
+        return state.get(kind)
+    key = f"{kind}@{company}"
+    if key in state:
+        return state[key]
+    other = MAIN_DEAL if kind == FIRST_DEAL else FIRST_DEAL if kind == MAIN_DEAL else ""
+    if other and state.get(f"{other}@{company}") is True:
+        return False                          # 유도 ② — 배타
+    banks = traded_banks(state)
+    if banks is None or banks == UNSURE:
+        return None                           # 목록을 아직 안 물었다 / 모른다고 답했다
+    if company in banks:
+        return None                           # 거래해 본 기관 — 실적을 되묻는다
+    return True if kind == FIRST_DEAL else False      # 유도 ①
 
 
 def threshold_question(item: dict) -> str | None:
@@ -258,9 +381,13 @@ def question_for(item: dict, state: dict) -> dict | None:
     kind = item.get("condition_type")
     if kind in UNDECIDABLE:
         return None                      # 추첨·랜덤 — 사용자도 은행도 미리 모른다
-    answered = state.get(kind)
+    # **답은 기관별로 있다** (F6). 유도된 답도 답이므로 유도되면 질문이 안 나간다
+    company = item.get("_기관") or ""
+    answered = answer_of(kind, company, state)
     if answered == UNSURE:
         return None                      # 이미 물었고 "모르겠다" 였다
+    if answered is False:
+        return None                      # 아니오 — 유도든 직접 답이든 물을 것이 없다
     if answered and has_threshold(item):
         key = threshold_question(item)
         if key is None:
@@ -271,8 +398,9 @@ def question_for(item: dict, state: dict) -> dict | None:
         return {"key": key, "kind": kind, "unit": "예아니오", "need": None,
                 "direction": None, "evidence": item.get("evidence") or ""}
     if answered is None:
-        return {"key": kind, "kind": kind, "unit": "예아니오", "need": None,
-                "direction": None, "evidence": item.get("evidence") or ""}
+        return {"key": type_key(kind, company), "kind": kind, "unit": "예아니오",
+                "need": None, "direction": None,
+                "evidence": item.get("evidence") or ""}
     return None
 
 
@@ -281,13 +409,14 @@ def caveats_for(items_unknown: list[dict], items_met: list[dict], state: dict) -
     out = []
     for it in items_unknown:
         kind = it.get("condition_type")
+        answered = answer_of(kind, it.get("_기관") or "", state)     # F6
         if kind == UNCLEAR_TYPE:
             out.append("조건불명")       # 공시가 조건을 안 적었다 — 우리 잘못이 아니다
         elif kind in UNDECIDABLE:
             out.append("추첨")           # 랜덤·추첨 — 은행도 미리 모른다
-        elif state.get(kind) == UNSURE:
+        elif answered == UNSURE:
             out.append("모름")
-        elif state.get(kind) and has_threshold(it):
+        elif answered and has_threshold(it):
             key = threshold_question(it)
             if key is None:
                 out.append("단계불명")
@@ -553,12 +682,22 @@ def scope_rows(rows: list[dict], company: str | None = None,
 
 
 def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
-    """`{조건 유형: {수치 후속 질문 키}}`. "모두 예" 를 가정한 최대 질문 집합이다."""
+    """`{유형 상태 키: {문구 단위 후속 질문 키}}`. "모두 예" 를 가정한 최대 집합이다.
+
+    **키가 기관별로 갈린다** (F6 · `prereg-15`) — 기관 상대 유형은 `자동이체@국민은행`
+    처럼 기관이 붙는다. 그래서 은행권 12개월 유형 질문이 15개에서 **(유형, 기관) 쌍
+    56개 + 기관 무관 9개**로 늘어나는데, 목록 질문 하나가 안 고른 기관을 전부 유도하므로
+    **거래 은행 1곳 사용자는 16개**로 끝난다(`prereg-15` P5).
+
+    분모(*"전부 답하면 질문 N개"*)는 **거래 은행이 전부일 때**의 값이다. 그래서
+    목록에 답하면 분모가 줄어들고, `questions_left()` 는 절대 늘어나지 않는다(A4).
+    """
     plan: dict[str, set[str]] = {}
     for row in rows:
         got = by_pair.get(row["pair_id"])
         if not got or not got.get("schema_ok"):
             continue
+        company = row.get("company") or ""
         for it in (got["parsed"].get("items") or []):
             if not it.get("applies_to_term"):
                 continue
@@ -568,10 +707,15 @@ def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
             kind = UNCLEAR_TYPE if verdict == "조건불명" else it.get("condition_type")
             if kind in UNDECIDABLE or kind in ALWAYS_MET:
                 continue                      # 물어도 소용없다 — 추첨·항상 충족
-            plan.setdefault(kind, set())
+            it = {**it, "_기관": company}      # 문구 키가 기관을 담는다 (§1.2)
+            key = type_key(kind, company)
+            plan.setdefault(key, set())
             q = threshold_question(it) if has_threshold(it) else None
             if q:
-                plan[kind].add(q)             # 문구 단위 후속 질문 (`prereg-10`)
+                plan[key].add(q)              # 문구 단위 후속 질문 (`prereg-10`)
+    # 목록 질문 — 기관 상대 유형이 하나라도 있으면 **맨 먼저** 묻는다
+    if any("@" in k for k in plan):
+        plan[TRADED_KEY] = set()
     return plan
 
 
@@ -588,6 +732,8 @@ def questions_answered(plan: dict[str, set[str]], state: dict) -> int:
         전체        답한 + 남은 (지워진 만큼 줄어든다)
         남은        `questions_left()`
     """
+    # **유도된 답은 세지 않는다** — 사용자가 답한 것만 센다. 유도는 상태에 안 쓰고
+    # `answer_of()` 가 읽을 때 계산하므로, 여기서는 `state` 에 있는 것만 보면 된다
     types = sum(1 for kind in plan if kind in state)
     clauses = sum(1 for subs in plan.values() for c in subs if c in state)
     return types + clauses
@@ -596,8 +742,12 @@ def questions_answered(plan: dict[str, set[str]], state: dict) -> int:
 def questions_left(plan: dict[str, set[str]], state: dict) -> int:
     """화면에 띄울 남은 질문 수. 이 값은 답할 때마다 절대 늘어나지 않는다."""
     n = 0
-    for kind, subs in plan.items():
-        answered = state.get(kind)
+    for key, subs in plan.items():
+        if key == TRADED_KEY:                 # 목록 질문 하나 (F6)
+            n += 0 if key in state else 1
+            continue
+        kind, _at, company = key.partition("@")
+        answered = answer_of(kind, company, state)     # 유도된 답도 답이다
         if answered is None:
             n += 1 + len(subs)                # 아직 안 물었다 — 후속까지 상정한다
         elif answered is False or answered == UNSURE:
@@ -607,7 +757,8 @@ def questions_left(plan: dict[str, set[str]], state: dict) -> int:
     return n
 
 
-def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
+def rank_questions(scored: list[dict],
+                   state: dict | None = None) -> list[tuple[str, dict]]:
     """되물을 질문을 **고정된 우선순위**로 줄 세운다. 위 주석이 그 규칙이다.
 
     **1순위가 세는 것은 `product_key()` 로 센 상품 수다** (`prereg-13` · 이슈 #25).
@@ -647,7 +798,22 @@ def rank_questions(scored: list[dict]) -> list[tuple[str, dict]]:
                 # 문자열에서 나오므로 건드리면 답·세션·측정이 흔들린다).
                 slot["출처"].setdefault(q["evidence"], set()).add(
                     s.get("company") or "")
-    return sorted(asks.items(), key=lambda kv: (-len(kv[1]["products"]), kv[0]))
+    ordered = sorted(asks.items(), key=lambda kv: (-len(kv[1]["products"]), kv[0]))
+
+    # **목록 질문이 맨 앞이다** (F6 · `prereg-15` §1). 순서 규칙을 깨는 것이 아니라
+    # **이 질문만 다른 질문을 유도**하기 때문이다 — 답 하나가 안 고른 기관의 조건을
+    # 전부 정하므로, 뒤에 물으면 이미 물어본 것을 다시 정하는 꼴이 된다.
+    # `0018` 의 커버리지 순은 그 아래에서 그대로 돈다.
+    rel = [k for k, _ in ordered if "@" in k and "#" not in k]
+    if rel and (state is None or TRADED_KEY not in state):
+        banks = sorted({s.get("company") or "" for s in scored if s.get("company")})
+        opened = {product_key(s) for s in scored
+                  if any("@" in q["key"] and "#" not in q["key"]
+                         for q in s.get("questions", []))}
+        ordered.insert(0, (TRADED_KEY, {
+            "unit": LIST_UNIT, "kind": LIST_KIND, "products": opened,
+            "needs": set(), "evidence": set(), "출처": {}, "기관": banks}))
+    return ordered
 
 
 # 층 라벨 — 제외하지 않고 라벨로 가른다. 메인 화면은 이 라벨로 자른다
@@ -752,7 +918,9 @@ def condition_met(item: dict, state: dict) -> bool | None:
         return True
     if kind in UNDECIDABLE:
         return None
-    value = state.get(kind)
+    # **기관별 답을 읽는다** (F6 · `prereg-15`). 전역으로 읽으면 답 하나가 여러
+    # 기관 상품을 한꺼번에 올려 **확정 금리를 실제보다 높게** 말한다
+    value = answer_of(kind, item.get("_기관") or "", state)
     if value is None or value == UNSURE:
         return None
     if value and has_threshold(item):
@@ -858,19 +1026,27 @@ def evaluate(row: dict, extracted: dict, state: dict, tax: dict) -> dict:
     #   "조건불명"   금액은 공시가 알려줬다 — 금리는 남기되 **판정 불가로 못 박는다**
     # 판정 불가로 두면 질문도 안 만들어지고(`question_for` 의 UNDECIDABLE 경로)
     # 항상 충족도 되지 않는다. 사용자에게는 범위와 사유로 나간다.
+    # **항목마다 기관을 찍는다** (F6 · `prereg-15`). 조건은 그 기관과의 관계이고,
+    # 아래 `condition_met`·`question_for`·`caveats_for` 가 전부 이 값을 읽는다.
+    # 여기서 안 찍으면 판정이 조용히 전역으로 돌아가 **과대 진술이 되살아난다**
+    company = row.get("company") or ""
     items, n_unclear = [], 0
     for it in raw_items:
         verdict = no_condition(it)
         if verdict == "제외":
             continue
+        it = {**it, "_기관": company}
         if verdict == "조건불명":
             it = {**it, "condition_type": UNCLEAR_TYPE}
             n_unclear += 1
         items.append(it)
     cap = extracted.get("cap") if extracted else None
     rng = bonus_range(items, cap, state)
+    # **기관별 답을 읽는다** (F6). 전역으로 읽으면 기관 상대 유형이 전부 빠져
+    # `n_ladder`(*"물어도 판정할 수 없는 조건 N건 — 계단식 우대다"*)가 화면에서 줄어든다
     thr_unknown = [it for it in rng["unknown"]
-                   if state.get(it.get("condition_type")) and has_threshold(it)]
+                   if answer_of(it.get("condition_type"), it.get("_기관") or "", state)
+                   and has_threshold(it)]
     n_threshold = len(thr_unknown)
     # 되물으면 판정할 수 있는 것과, 물어도 판정할 수 없는 것(계단식)을 가른다
     ask, ladder = [], 0
@@ -991,8 +1167,9 @@ def main() -> None:
         return
     group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
     company, kinds, prefs_arg, report_n = None, None, None, 0
+    banks_arg = None                     # F6 — 거래해 본 기관 목록
     for flag in ("--group", "--term", "--top", "--state", "--sort",
-                 "--company", "--kind", "--prefs", "--report"):
+                 "--company", "--kind", "--prefs", "--report", "--banks"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -1007,12 +1184,14 @@ def main() -> None:
             kinds = v if flag == "--kind" else kinds
             prefs_arg = v if flag == "--prefs" else prefs_arg
             report_n = int(v) if flag == "--report" else report_n
+            banks_arg = v if flag == "--banks" else banks_arg
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
                          "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]\n"
-                         "        [--prefs 확실성=많이,...] [--report 3] [--survey]")
+                         "        [--banks 국민은행,케이뱅크 | --banks 없음] "
+                         "[--prefs 확실성=많이,...] [--report 3] [--survey]")
     if order not in ("hi", "lo"):
         raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
     import prefs as _P                   # 파싱만 먼저 — 잘못된 값을 일찍 잡는다
@@ -1050,6 +1229,11 @@ def main() -> None:
         state[name] = float(int(m.group(1).replace(",", ""))
                             * MONEY_UNIT.get(m.group(2) or "원", 1))
         state.setdefault(name.rpartition("_")[0], True)   # 수치를 답했으면 그 조건은 한다
+    # 거래해 본 기관 목록 (F6 · `prereg-15`). **안 주면 안 물어본 것**이고, 기관 상대
+    # 조건은 전부 판정 불가로 남는다 — 우리가 "거래 없음" 으로 가정하지 않는다
+    if banks_arg is not None:
+        state[TRADED_KEY] = ([] if banks_arg.strip() in ("없음", "-", "")
+                             else [b.strip() for b in banks_arg.split(",") if b.strip()])
     tax = load_tax()
 
     rows, pairs = load_pairs(stamp, group)
@@ -1068,6 +1252,15 @@ def main() -> None:
     llm = json.loads(llm_path.read_text(encoding="utf-8"))
     llm, unified = unify_types(llm)          # 같은 문구는 같은 유형으로 (`decisions/0020`)
     by_pair = {p["pair_id"]: p for p in llm["pairs"]}
+
+    # `--banks` 의 기관 이름을 후보 집합에 대조한다 (F6) — 판정은 `unknown_banks()`
+    # 한 곳에서만 하고 웹도 같은 함수를 쓴다
+    live = [r for r in rows if r["term"] == term]
+    bad_banks = unknown_banks(state, live)
+    if bad_banks:
+        cos = sorted({r.get("company") or "" for r in live if r.get("company")})
+        raise SystemExit(f"후보에 없는 기관이다: {bad_banks}\n"
+                         f"가능한 기관: {', '.join(cos)}")
 
     scored = []
     for row in rows:
@@ -1199,7 +1392,7 @@ def main() -> None:
     #
     # 순서는 `rank_questions()` 가 정한다 — **고정된 규칙이다**(`decisions/0018`).
     # 여기서 임의로 다시 정렬하면 예산 제약이 무력해진다.
-    ordered = rank_questions(scored)
+    ordered = rank_questions(scored, state)
 
     def fmt(need: float, unit: str) -> str:
         if unit != "금액":
@@ -1211,6 +1404,12 @@ def main() -> None:
         print(f"되물을 질문 — 답 하나가 상품 몇 개를 확정으로 옮기나 "
               f"(decisions/0016 · 평가 예산 {ASK_BUDGET}개 · decisions/0018)")
         for key, slot in ordered[:ASK_BUDGET]:
+            if slot["unit"] == LIST_UNIT:            # F6 — 목록 질문
+                print(f"    {key:<30}상품 {len(slot['products']):>3}개   "
+                      f"거래해 본 기관을 고른다 ({len(slot['기관'])}곳 중 여럿)")
+                print(f"        --banks {','.join(slot['기관'][:3])},...  "
+                      f"· 거래 없으면 --banks 없음")
+                continue
             if slot["needs"]:
                 needs = " · ".join(fmt(v, slot["unit"]) for v in sorted(slot["needs"])[:4])
                 more = "" if len(slot["needs"]) <= 4 else f" +{len(slot['needs']) - 4}"
@@ -1229,8 +1428,14 @@ def main() -> None:
             print(f"    --- 여기까지가 평가 예산 {ASK_BUDGET}개 ---")
             print(f"    ... 그리고 {len(ordered) - ASK_BUDGET}개 더 "
                   f"(물어도 되지만 평가 지표에는 안 들어간다)")
-        print(f"    → --state '{ordered[0][0]}=<값>' · 안 하면 '{ordered[0][0]}=아니오'"
-              f" · 모르면 '{ordered[0][0]}=모름'")
+        # 안내는 **그 질문에 실제로 쓸 수 있는 말**이어야 한다. 목록 질문은
+        # `--state` 로 못 답한다 — 틀린 안내를 내면 사용자가 그대로 따라 하고 막힌다
+        if ordered[0][1]["unit"] == LIST_UNIT:
+            print(f"    → --banks '{ordered[0][1]['기관'][0]}' · "
+                  f"거래 없으면 --banks 없음")
+        else:
+            print(f"    → --state '{ordered[0][0]}=<값>' · 안 하면 '{ordered[0][0]}=아니오'"
+                  f" · 모르면 '{ordered[0][0]}=모름'")
 
     # 되물어도 못 채우는 사유 — 사용자에게 보여줄 문장 그대로
     codes = Counter(c for s in scored for c in s.get("caveats", []))
