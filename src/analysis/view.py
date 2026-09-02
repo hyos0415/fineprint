@@ -71,6 +71,47 @@ def outside_best(rows_all: list[dict], rows_in: list[dict], by_pair: dict,
             "channel": best_out.get("channel") or ""}
 
 
+def display(s: dict) -> dict:
+    """상품 한 줄이 **무엇을 어떻게 보여줄지**. 렌더러가 이걸 꽂기만 한다.
+
+    **판정을 템플릿에 넣지 않으려고 만들었다** (F4-2 · `0038` 반증 조건).
+    `{% if 폭이 있으면 범위로 %}` 를 템플릿이 하기 시작하면 화면 계약이 뷰 모델
+    밖으로 샌다 — F4-0 이 계약을 객체로 옮긴 일이 무의미해진다.
+
+    CLI 의 `product_line` 과 웹 템플릿이 **같은 이 함수**를 읽는다. 한쪽만 쓰는
+    칸을 만들지 않는다(`0039` 반증 조건 1).
+
+    돌려주는 값은 전부 **이미 정해진 문자열**이다 — 렌더러는 배치만 정한다.
+    """
+    import ask_loop as L
+
+    # 남은 조건 수 — **금리에 영향이 없으면 그렇게 적는다** (`0017` 부수 정리)
+    if s["net_hi"] > s["net_lo"]:
+        left = f"남은 {s['n_unknown']}개"
+    elif s["n_unknown"]:
+        left = f"남은 {s['n_unknown']}개 (금리 영향 없음)"
+    else:
+        left = "확정"
+    # 선호 조정 — **금리 칸이 아니라 별도 칸이다** (`prereg-12` §3 · A11)
+    if s.get("_blocked"):
+        adj = "선호밖"
+    elif s.get("_adj"):
+        adj = f"조정 {s['_adj']:+.2f}%p"
+    else:
+        adj = ""
+    return {
+        "이름": s["name"],
+        "기관": s.get("company") or "",
+        "범위": L.span(s),          # 같을 때만 숫자 하나다 (A1)
+        "채널": s.get("channel") or "",
+        "남은": left,
+        "조정": adj,
+        "조정_사유": s.get("_why") or [],
+        "주의": list(s.get("caveats") or []),
+        "층": s["tier"],
+    }
+
+
 def next_question(scored: list[dict], state: dict) -> tuple[str | None, dict | None]:
     """다음에 물을 질문 하나. **순서 규칙은 `rank_questions` 가 정한다** (`0018`).
 

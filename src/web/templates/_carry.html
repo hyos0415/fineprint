@@ -1,0 +1,14 @@
+{# 다음 요청에 그대로 실어 보낼 것들 — **서버가 상태를 안 들기 때문에 화면이 들고 다닌다**
+   (`0040` 무상태). `state` 는 JSON 문자열 하나로 나른다.
+
+   폼 hidden 을 고른 이유 — JS 없이도 돌고, 서버가 낸 HTML 만으로 화면이 재현되어
+   렌더 겹 검사가 브라우저 없이 붙는다. 기기에도 안 남는다 (이슈 #40 코멘트).
+
+   Jinja2 autoescape 가 켜져 있어 `&`·`"` 가 들어간 값도 안전하게 실린다. #}
+<input type="hidden" name="snapshot" value="{{ form['snapshot'] }}">
+<input type="hidden" name="group" value="{{ form['group'] }}">
+<input type="hidden" name="term" value="{{ form['term'] }}">
+<input type="hidden" name="company" value="{{ form.get('company') or '' }}">
+<input type="hidden" name="kinds" value="{{ form.get('kinds') or '' }}">
+<input type="hidden" name="prefs" value="{{ form.get('prefs') or '' }}">
+<input type="hidden" name="state_json" value="{{ state_json }}">
