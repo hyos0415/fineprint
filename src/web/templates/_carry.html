@@ -11,4 +11,7 @@
 <input type="hidden" name="company" value="{{ form.get('company') or '' }}">
 <input type="hidden" name="kinds" value="{{ form.get('kinds') or '' }}">
 <input type="hidden" name="prefs" value="{{ form.get('prefs') or '' }}">
+{# 정렬 — 안 주면 지금 화면의 정렬을 그대로 싣고, `order_value` 를 주면 그것을 싣는다.
+   화면 위 전환 버튼이 **반대 값**을 실어 보내는 데 쓴다 (`prereg-14` §8 A안). #}
+<input type="hidden" name="order" value="{{ order_value | default(form.get('order') or 'hi') }}">
 <input type="hidden" name="state_json" value="{{ state_json }}">

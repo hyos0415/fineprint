@@ -138,11 +138,17 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
     """
     if key is None or slot is None:
         return None
+    # **문구마다 어느 기관 것인지 붙인다** (2026-09-02) — "당행" 이 가리킬 대상이
+    # 없으면 사용자가 답을 고를 수 없다. 같은 문구를 여러 기관이 쓰면 전부 적는다.
+    src = slot.get("출처") or {}
+    문구 = [{"문구": ev,
+            "기관": " · ".join(sorted(o for o in src.get(ev, set()) if o))}
+           for ev in sorted(slot["evidence"])]
     return {
         "key": key,
         "유형": slot["kind"],
         "단위": slot["unit"],
-        "문구": sorted(slot["evidence"]),
+        "문구": 문구,
         "여는_상품수": len(slot["products"]),
         "선택지": ["예", "아니오", "모름"],
     }
@@ -151,7 +157,7 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
 def build(scored: list[dict], plan: dict, state: dict, total: int,
           top: int | None = None, outside: dict | None = None,
           total_all: int | None = None, start: dict | None = None,
-          prefs: dict | None = None) -> dict:
+          prefs: dict | None = None, order: str = "hi") -> dict:
     """화면 하나가 내놓을 것 전부.
 
     인자는 `ask_loop.render_final_screen()` 과 같다 — 그 함수가 이것을 부르고,
@@ -160,10 +166,10 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
     import ask_loop as L                # 렌더 쪽 헬퍼. 순환을 피해 여기서만 부른다
     import prefs as P
 
-    main = L.ranked(scored, prefs)
+    main = L.ranked(scored, prefs, order)
     rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
     shown = main[:top] if top else main
-    _bar, st = L.status_lines(plan, state, scored, total, start, prefs)
+    _bar, st = L.status_lines(plan, state, scored, total, start, prefs, order)
 
     tally = {}
     for s in rest:
@@ -180,12 +186,15 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
             "세후_라벨": L.tax_label(scored),      # A12 — 세율은 config 에서 온다
             "고지": C.NOTICE,                      # A13 — `0035`
             "세율": shown[0]["tax_rate"] if shown else None,
+            # 이 화면이 무슨 순서인지 — 렌더러가 사용자에게 그대로 말한다
+            "정렬": order,
         },
         # A4·A6 이 읽는 것. **이미 뷰 모델이었다** — `status_lines()` 가 돌려준다
         "progress": st,
         "headline": {
-            # A8 — 성과 줄은 **목록 1위와 같아야** 한다. 낱말도 사실이어야 한다(`0030`)
-            "라벨": "1위" if prefs else "최고",
+            # A8 — 성과 줄은 **목록 1위와 같아야** 한다. 낱말도 사실이어야 한다(`0030`).
+            # 낱말은 `status_facts()` 가 정한다 — 여기서 또 정하면 CLI 와 갈라진다
+            "라벨": st["성과_라벨"],
             "상품": main[0] if main else None,
             "폭_시작": (start or {}).get("width"),
         },
@@ -246,6 +255,15 @@ def check_model(vm: dict) -> list[dict]:
                 and head["net_hi"] < best - 0.005:
             hit("A8", head["name"],
                 f"라벨이 '최고' 인데 1위 {head['net_hi']:.2f}% 위에 {best:.2f}% 가 있다")
+        # **확정된 값 순 화면도 같은 검사를 받는다** (`prereg-14` §8 · A안).
+        # 라벨만 바꾸고 정렬이 안 따라가면 여기서 걸린다
+        best_lo = max((s["net_lo"] for s in prods), default=None)
+        if (vm["headline"]["라벨"] == "확실히 받는 것 중 최고"
+                and best_lo is not None
+                and head["net_lo"] < best_lo - 0.005):
+            hit("A8", head["name"],
+                f"라벨이 '확실히 받는 것 중 최고' 인데 1위 확정 "
+                f"{head['net_lo']:.2f}% 위에 {best_lo:.2f}% 가 있다")
 
     # A12·A13 — 라벨과 고지가 담겼나
     if vm["products"] and not vm["meta"]["세후_라벨"]:
@@ -271,6 +289,11 @@ def check_model(vm: dict) -> list[dict]:
         # 문구가 없는 조건은 `조건불명` 으로 질문이 안 만들어지므로 여기 오면 결함이다
         if not cur["문구"]:
             hit("A3", cur["key"], "물을 질문에 공시 문구가 없다")
+        # **문구에 기관이 붙어 있나** — 없으면 "당행" 이 가리킬 대상이 없다
+        for f in cur["문구"]:
+            if not f.get("기관"):
+                hit("A3", cur["key"],
+                    f'문구에 기관이 없다: "{f["문구"][:40]}…"')
         if cur["선택지"] != ["예", "아니오", "모름"]:
             hit("A3", cur["key"], f"선택지가 셋이 아니다: {cur['선택지']}")
     return bad

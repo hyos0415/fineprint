@@ -53,12 +53,17 @@ CASES = [
     ("스코프+선호", {"snapshot": "20260826", "term": 12, "company": "우리",
                      "prefs": "영업점=되도록안간다,확실성=조금"}),
     ("전체 목록", {"snapshot": "20260826", "term": 12, "top": 500}),
+    # 정렬 (`prereg-14` §8 A안). 노출한 경로는 대조도 받아야 한다
+    ("확정된 값 순", {"snapshot": "20260826", "term": 12, "order": "lo"}),
+    ("확정순+답 둘", {"snapshot": "20260826", "term": 12, "order": "lo",
+                     "state": {"급여_연금이체": False, "카드실적": False}}),
 ]
 
 # 에러 계약 — (이름, 요청, 기대 코드). 422 는 Pydantic 이 요청 모양을 거른 것이다
 ERRORS = [
     ("없는 스냅샷", {"snapshot": "20990101", "term": 12}, 400),
     ("없는 기간", {"snapshot": "20260826", "term": 7}, 400),
+    ("모르는 정렬", {"snapshot": "20260826", "term": 12, "order": "middle"}, 422),
     ("모르는 조건", {"snapshot": "20260826", "term": 12, "state": {"없는조건": True}}, 400),
     ("빈 스코프", {"snapshot": "20260826", "term": 12, "company": "없는은행"}, 400),
     ("잘못된 선호", {"snapshot": "20260826", "term": 12, "prefs": "영업점=많이"}, 400),
@@ -97,7 +102,7 @@ def local(body: dict) -> dict:
     total_all = (C.questions_left(C.question_plan(rows_all, by_pair), {})
                  if len(rows) < len(rows_all) else None)
     vm = V.build(scored, plan, state, total, body.get("top", 10), outside,
-                 total_all, None, prefs)
+                 total_all, None, prefs, body.get("order", "hi"))
     return {**vm, "reports": [R.build(s, i, prefs)
                               for i, s in enumerate(vm["products"], 1)]}
 

@@ -36,6 +36,23 @@
     </div>
   </div>
 
+  {# 정렬 — `0017` 이 남겨 둔 `--sort lo` 를 화면에 낸다 (`prereg-14` §8 A안).
+     조건을 못 채우는 사용자는 최대순 맨 위에서 자기가 받을 상품을 못 본다 —
+     무작위 200명 중 19.5%가 그 상태였다. 화면 안에서 언제든 바꿀 수 있다. #}
+  <div class="row">
+    <div class="grow">
+      <label for="order">무엇을 먼저 보여줄까요</label>
+      <select id="order" name="order">
+        <option value="hi" {% if form.get('order', 'hi') == 'hi' %}selected{% endif %}>
+          조건을 다 채웠을 때 받을 수 있는 금리 순
+        </option>
+        <option value="lo" {% if form.get('order') == 'lo' %}selected{% endif %}>
+          지금 확실히 받는 금리 순 — 조건을 채우기 어렵다면 이쪽
+        </option>
+      </select>
+    </div>
+  </div>
+
   <div class="row">
     <div class="grow">
       <label for="company">기관 좁히기 (선택 · 쉼표로 여럿)</label>
