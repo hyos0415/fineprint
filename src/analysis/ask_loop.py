@@ -225,8 +225,10 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
     # 선호 조정 — **금리 칸이 아니라 별도 칸이다.** 점수를 금리처럼 보여주면 공시에
     # 없는 숫자를 사용자에게 보여주는 것이다 (`prereg-12` §3 · 화면 계약 A11).
     adj = f"  {d['조정']}" if d["조정"] else ""
-    return (f"  {i:>2}. {s['name'][:24]:<25}{d['범위']:>15}{ch:<16}{left:<22}"
+    line = (f"  {i:>2}. {s['name'][:24]:<25}{d['범위']:>15}{ch:<16}{left:<22}"
             f"{adj}{move}{note}")
+    # 같은 상품의 다른 행 (`prereg-18` §2.3 · A16) — 웹도 같은 문자열을 그린다
+    return "\n".join([line] + [f"      └ {v}" for v in d["다른_행"]])
 
 
 def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:
