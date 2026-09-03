@@ -34,6 +34,9 @@
         목록은 `calculate.internal_words()` 한 곳에서 온다. `0019` 와 다르다 —
         `0019` 는 *뜻을 모르는 남의 낱말*("탑스")에 뜻을 지어내는 것을 막았고, 여기는
         **우리가 지은 낱말**이라 뜻을 정확히 안다
+    A15 **"하겠다" 고 답한 조건 위에 선 금리는 그 전제를 말해야 한다** (이슈 #50 ·
+        `prereg-17`) — 은행권 확정 50개 중 44개가 자동이체·카드실적 같은 행동 조건에
+        기댄다. 리포트와 웹 화면에 `PREMISE_NOTE` 와 그 조건 목록이 있어야 한다
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -227,6 +230,12 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
     for s in vm["products"]:
         if s["net_hi"] - s["net_lo"] > EPS and V.display(s)["범위"] not in html:
             bad += hit("A1", s["name"], f"범위 {V.display(s)['범위']} 가 화면에 없다")
+    # A15 — 행동 조건에 기댄 금리는 전제를 말한다 (이슈 #50). 리포트 겹이 아니라
+    # **웹 렌더러가 그렸는지**를 본다 — 모델에 있어도 안 그리면 위반이다(`0039`)
+    for rep in reports:
+        if rep["전제"] and C.PREMISE_NOTE not in html:
+            bad += hit("A15", rep["상품"], "행동 조건에 기댄 금리인데 전제 문장이 없다")
+            break
     # A3 — 사유는 **문장**으로 나가야 한다. 그리고 태그는 **라벨**이어야 한다 (A14)
     for r in vm["notices"]["사유"]:
         if r["문장"] not in html:
@@ -273,10 +282,16 @@ def check_report(scored: list[dict], top: int, prefs: dict | None,
                      + check_org_names(text, scored, "리포트"))]
     main = L.ranked(scored, prefs)[:top]
     for s in main:
-        block = R.render(R.build(s, 1, prefs))
+        rep = R.build(s, 1, prefs)
+        block = R.render(rep)
         if s["net_hi"] - s["net_lo"] > EPS and "~" not in block:
             bad.append({"assert": "A1", "product": s["name"], "session": tag,
                         "step": -1, "detail": "[리포트] 폭이 남았는데 범위가 없다"})
+        # A15 — "하겠다" 고 답한 조건 위에 선 금리는 그 전제를 말해야 한다 (이슈 #50)
+        if rep["전제"] and C.PREMISE_NOTE not in block:
+            bad.append({"assert": "A15", "product": s["name"], "session": tag,
+                        "step": -1, "detail": "[리포트] 행동 조건에 기댄 금리인데 "
+                                              "전제 문장이 없다"})
     for code in sorted({c for s in main for c in s.get("caveats", [])}
                        & set(A3_CODES)):
         if C.CAVEAT[code] not in text:
@@ -581,7 +596,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A11", "가중치는 정렬만 바꾼다"),
                        ("A12", "금리 옆에 `세후` 라벨이 있다"),
                        ("A13", "화면이 자기가 무엇인지 밝힌다"),
-                       ("A14", "내부 이름이 화면에 없다")):
+                       ("A14", "내부 이름이 화면에 없다"),
+                       ("A15", "행동 조건에 기댄 금리는 전제를 말한다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue
