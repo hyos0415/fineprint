@@ -60,12 +60,15 @@
     <label class="pick"><input type="checkbox" name="answer_bank"
       value="{{ cur['값'][loop.index0] }}"> {{ bank }}</label>
     {% endfor %}
+    {# 버튼 셋은 뷰 모델이 정한다 (이슈 #48) — "거래한 곳이 없다" 는 안내문이 아니라 버튼이다.
+       빈 채로 "고른 대로 계속" 을 누르면 서버가 같은 화면을 `notice` 와 함께 다시 낸다 #}
+    {% if notice %}<p class="notice"><b>{{ notice }}</b></p>{% endif %}
     <p>
-      <button type="submit" name="answer" value="고름">고른 대로 계속</button>
-      <button type="submit" name="answer" value="모름">모르겠습니다</button>
+    {% for b in cur['버튼'] %}
+      <button type="submit" name="answer" value="{{ b['값'] }}">{{ b['라벨'] }}</button>
+    {% endfor %}
     </p>
-    <p class="notice">하나도 고르지 않고 눌러도 됩니다 — <b>거래해 본 은행이 없다</b>는 답입니다.
-      "모르겠습니다" 를 고르면 채워 넣지 않고 은행마다 따로 여쭙습니다.</p>
+    <p class="notice">{{ cur['모름_안내'] }}</p>
   </form>
 </div>
 {% else %}

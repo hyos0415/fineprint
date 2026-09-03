@@ -261,16 +261,25 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
 
     # 답 하나를 더한다. **예/아니오/모름 셋뿐이다** (`0027`) — 목록 질문만 예외다(F6)
     key, answer = get("answer_key"), get("answer")
+    notice: str | None = None
     if key == C.TRADED_KEY and answer:
-        # 체크한 기관들이 답이다. **하나도 안 고른 것도 답이다** ("거래한 곳이 없다").
+        # 답은 셋이다 (이슈 #48) — 고른 목록 · **"거래한 곳이 없다"(명시적 버튼)** · 모름.
+        # 예전에는 빈 제출이 "없다" 였는데, 3런에서 사람이 그것을 답으로 못 읽고
+        # "모르겠습니다" 를 눌렀다(`prereg-16` §6). 이제 빈 채로 "고름" 을 누르면
+        # **받지 않고 같은 화면을 안내와 함께 다시 낸다.**
         # 고른 기관이 후보에 없는 이름이면 막는다 — 조용히 무시하면 사용자가 고른 것과
         # 계산에 들어간 것이 달라진다
+        picked = list(dict.fromkeys(picked_banks or []))
         if answer == "모름":
             state[key] = C.UNSURE
+        elif answer == "없음":
+            state[key] = []
         elif answer != "고름":
             raise HTTPException(status_code=400, detail=f"모르는 답: {answer}")
+        elif picked:
+            state[key] = picked
         else:
-            state[key] = list(dict.fromkeys(picked_banks or []))
+            notice = "__빈_제출__"           # 아래에서 뷰 모델의 문장으로 바꾼다
     elif key and answer:
         if answer not in ("예", "아니오", "모름"):
             raise HTTPException(status_code=400, detail=f"모르는 답: {answer}")
@@ -295,7 +304,11 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
                         company=company or None, kinds=kinds or None,
                         prefs=prefs_arg or None, top=10, state=state, order=order)
     vm, reports = _screen_payload(req)
-    return RENDER.render_screen(vm, form, reports)
+    if notice:
+        # 문장은 뷰 모델이 든다 — 한쪽만 쓰는 낱말을 만들지 않는다 (`0039` 반증 조건 1)
+        cur = vm["questions"].get("현재") or {}
+        notice = cur.get("빈_제출_안내") or "은행을 하나 이상 골라 주세요"
+    return RENDER.render_screen(vm, form, reports, notice)
 
 
 async def _form(request: Request) -> dict[str, list[str]]:

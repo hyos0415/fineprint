@@ -404,7 +404,10 @@ def prompt_for(key: str, slot: dict) -> tuple[str, list[str]]:
         lines = [f"      {card['설명']}"]
         for i, b in enumerate(banks, 1):
             lines.append(f"      {i:>2}. {b}")
-        lines.append("      번호나 이름을 쉼표로 여럿 · [없음] · [모름] · [그만]")
+        # 버튼 라벨은 웹과 같은 것을 읽는다 (이슈 #48) — 한쪽만 쓰는 낱말을 안 만든다
+        라벨 = {b["값"]: b["라벨"] for b in card["버튼"]}
+        lines.append(f"      번호나 이름을 쉼표로 여럿 · [없음] {라벨['없음']} · "
+                     f"[모름] {라벨['모름']} · [그만]")
         return card["질문"], lines
 
     def _quote(f: dict, cut: int | None = None) -> str:

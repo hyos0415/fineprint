@@ -62,14 +62,20 @@ def render_start(form: dict | None = None, error: str | None = None) -> str:
     )
 
 
-def render_screen(vm: dict, form: dict, reports: list[dict]) -> str:
+def render_screen(vm: dict, form: dict, reports: list[dict],
+                  notice: str | None = None) -> str:
     """**검사가 부르는 함수.** 뷰 모델 하나가 화면 하나가 된다.
 
     `form` 은 다음 요청에 그대로 실어 보낼 것들이다 — 스냅샷·권역·기간·스코프·선호와
     **지금까지의 답(state)**. 서버가 상태를 안 들기 때문에 화면이 들고 다닌다(`0040`).
+
+    `notice` 는 **답을 받지 않고 같은 화면을 다시 낼 때** 붙이는 한 문장이다 (이슈 #48 —
+    목록 질문을 빈 채로 넘기려 한 경우). 문장은 뷰 모델(`빈_제출_안내`)에서 오고 판정은
+    서버가 한다. 템플릿은 받은 문장을 꽂기만 한다.
     """
     rows = [V.display(s) for s in vm["products"]]
     return _env.get_template("screen.html").render(
         vm=vm, rows=rows, form=form, reports=reports,
         state_json=form.get("state_json", "{}"),
+        notice=notice,
     )
