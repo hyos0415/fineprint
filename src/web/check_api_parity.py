@@ -28,9 +28,12 @@
 """
 from __future__ import annotations
 
+import html as _html
 import json
+import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -177,8 +180,58 @@ def main() -> None:
         if code != want_code:
             fail += 1
 
+    print("\n폼 계약 — 목록 질문의 답 셋 (이슈 #48). HTML 경로라 state_json 으로 확인한다")
+    fail += check_list_form(base)
+
     print(f"\n  {'**전부 통과**' if not fail else f'**실패 {fail}건**'}")
     raise SystemExit(1 if fail else 0)
+
+
+def post_form(base: str, fields: list[tuple[str, str]]) -> tuple[int, str]:
+    """`POST /screen` 을 브라우저처럼 urlencoded 로. 체크박스는 같은 이름이 여럿이다."""
+    data = urllib.parse.urlencode(fields).encode("utf-8")
+    req = urllib.request.Request(f"{base}/screen", data=data, method="POST",
+                                 headers={"Content-Type":
+                                          "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+
+
+def state_of(html: str) -> dict:
+    """화면이 들고 다니는 답 — hidden `state_json` 을 읽는다 (`0040`)."""
+    m = re.search(r'name="state_json" value="([^"]*)"', html)
+    return json.loads(_html.unescape(m.group(1))) if m else {}
+
+
+def check_list_form(base: str) -> int:
+    base_fields = [("snapshot", "20260826"), ("group", "bank"), ("term", "12"),
+                   ("state_json", "{}"), ("answer_key", C.TRADED_KEY)]
+    cases = [
+        # (이름, 추가 필드, 기대하는 _거래은행 값 · 'absent' 면 답이 안 들어가야 한다, 안내가 보여야 하나)
+        ("빈 채로 고름", [("answer", "고름")], "absent", True),
+        ("없음 버튼", [("answer", "없음")], [], False),
+        ("모름 버튼", [("answer", "모름")], "모름", False),
+        ("한 곳 고름", [("answer", "고름"), ("answer_bank", "주식회사 카카오뱅크")],
+         ["주식회사 카카오뱅크"], False),
+    ]
+    fail = 0
+    for label, extra, want, want_notice in cases:
+        code, html = post_form(base, base_fields + extra)
+        st = state_of(html)
+        got = st.get(C.TRADED_KEY, "absent")
+        has_notice = "은행을 하나 이상 고르거나" in html
+        ok = code == 200 and got == want and has_notice == want_notice
+        # 빈 제출을 막았으면 **같은 질문이 다시 나와야 한다** — 넘어가면 안 된다
+        if label == "빈 채로 고름" and "거래해 본 은행을 골라 주세요" not in html:
+            ok = False
+        mark = "맞다" if ok else "**틀리다**"
+        print(f"  {label:<12}{code}  {mark}  _거래은행={json.dumps(got, ensure_ascii=False)}"
+              f"  안내={'있음' if has_notice else '없음'}")
+        fail += 0 if ok else 1
+    return fail
 
 
 if __name__ == "__main__":
