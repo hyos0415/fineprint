@@ -31,8 +31,15 @@
       </select>
     </div>
     <div>
-      <label for="snapshot">공시 스냅샷</label>
-      <input id="snapshot" type="text" name="snapshot" value="{{ form.get('snapshot', '20260826') }}">
+      <label for="snapshot">공시 스냅샷 (선택)</label>
+      {# 비우면 서버가 **권역별 최신**을 고른다 (이슈 #52). 옛 폼은 권역과 무관하게
+         20260826 을 박아 두어 저축은행이 첫 화면에서 막혔다. #}
+      <input id="snapshot" type="text" name="snapshot" value="{{ form.get('snapshot', '') }}"
+             placeholder="비우면 최신">
+      {% if 스냅샷 %}
+      <span class="notice">최신:
+        {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 스냅샷.get(g) %}{{ label }} {{ 스냅샷[g][-1] }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}</span>
+      {% endif %}
     </div>
   </div>
 
@@ -84,9 +91,9 @@
   </div>
   {% endfor %}
   <div>
-    <label for="pref_list">{{ 목록축 }} (선택 · 가운뎃점으로 여럿)</label>
+    <label for="pref_list">{{ 목록축 }} (선택 · 쉼표나 띄어쓰기로 여럿)</label>
     <input id="pref_list" type="text" name="pref_{{ 목록축 }}" value="{{ form.get('pref_' ~ 목록축, '') }}"
-           placeholder="예: 우리·농협">
+           placeholder="예: 우리, 농협">
   </div>
 
   <p style="margin-top:22px"><button class="primary" type="submit">목록 보기</button></p>

@@ -48,7 +48,8 @@ _env = Environment(
 )
 
 
-def render_start(form: dict | None = None, error: str | None = None) -> str:
+def render_start(form: dict | None = None, error: str | None = None,
+                 snapshots: dict[str, list[str]] | None = None) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
@@ -58,6 +59,7 @@ def render_start(form: dict | None = None, error: str | None = None) -> str:
         form=form or {},
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
         목록축=P.LIST_AXIS,
+        스냅샷=snapshots or {},          # 권역별로 있는 날짜 — 비우면 최신 (이슈 #52)
         error=error,
     )
 

@@ -41,6 +41,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -99,7 +100,16 @@ AXES: dict[str, dict] = {
 
 # 축이 아니라 **목록**이다. `처음기관` 과 짝을 이룬다.
 LIST_AXIS = "거래기관"
-LIST_SEP = "·"          # `,` 는 축 구분자라 쓸 수 없다. 화면 표기와 같은 기호를 쓴다
+LIST_SEP = "·"          # 표기용. `--prefs` 문자열 안에서는 `,` 가 축 구분자라 이것을 쓴다
+# **읽을 때는 넉넉히 받는다** (이슈 #52) — 가운뎃점은 모바일·키보드에서 치기 어렵다.
+# 쉼표·공백·세로줄도 목록 구분자로 읽는다. `--prefs` 한 줄 안에서 쉼표는 축 구분자와
+# 겹치므로, 폼은 `split_list()` 로 먼저 정리해 LIST_SEP 로 이어 보낸다 (`app.py`)
+LIST_SEP_RE = re.compile(r"[·,|\s]+")
+
+
+def split_list(raw: str) -> list[str]:
+    """`우리, 농협` · `우리·농협` · `우리 농협` 을 모두 `["우리", "농협"]` 로."""
+    return [w for w in LIST_SEP_RE.split(raw.strip()) if w]
 
 USAGE = (f"--prefs 영업점=되도록안간다,{LIST_AXIS}=우리{LIST_SEP}농협,"
          "처음기관=많이,확실성=조금,이행=상관없음")
@@ -142,8 +152,7 @@ def parse(arg: str | None) -> dict:
         key, _, raw = tok.partition("=")
         key, raw = key.strip(), raw.strip()
         if key == LIST_AXIS:
-            out[LIST_AXIS] = [w.strip() for w in raw.replace("|", LIST_SEP)
-                              .split(LIST_SEP) if w.strip()]
+            out[LIST_AXIS] = split_list(raw)
             out["_answers"][key] = raw
             continue
         if key not in AXES:
