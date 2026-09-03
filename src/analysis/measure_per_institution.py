@@ -72,7 +72,9 @@ def state_new(plan: dict, banks: list[str]) -> dict:
     """
     state: dict = {C.TRADED_KEY: list(banks)}
     for key in type_keys(plan):
-        kind, _at, co = key.partition("@")
+        # 유형 자리에 문구 키가 올 수 있다 (`prereg-18` §2.1) — `#` 을 먼저 뗀다. 안 떼면
+        # 기관 이름에 해시가 붙어 "목록에 없는 기관" 으로 읽혀 유도 "아니오" 가 된다
+        kind, _at, co = key.partition("#")[0].partition("@")
         if C.answer_of(kind, co, state) is None:
             state[key] = True
     return state

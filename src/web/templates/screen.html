@@ -136,7 +136,9 @@
   {% for r in rows %}
   <tr>
     <td class="mono">{{ loop.index }}</td>
-    <td>{{ r['이름'] }}<div class="notice">{{ r['기관'] }}</div></td>
+    <td>{{ r['이름'] }}<div class="notice">{{ r['기관'] }}</div>
+      {# 같은 상품의 다른 행 — 적립방식·단리복리별 범위 (A16 · `prereg-18`) #}
+      {% for v in r['다른_행'] %}<div class="notice">└ {{ v }}</div>{% endfor %}</td>
     <td class="rate mono">{{ r['범위'] }}</td>
     <td>{% if r['채널'] %}<span class="tag">{{ r['채널'] }}</span>{% endif %}</td>
     <td>{{ r['남은'] }}

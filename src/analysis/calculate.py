@@ -325,6 +325,36 @@ def unknown_banks(state: dict, rows: list[dict]) -> list[str]:
     return [b for b in banks if b not in known]
 
 
+def implied_answer(kind: str, company: str, state: dict):
+    """유형 질문을 건너뛰고 **문구 질문에 바로 답한** 경우, 유형의 답은 "예" 다.
+
+    `prereg-18` §2.1 — 유형 아래 문구가 하나뿐이고 그것이 임계 문구면 유형 질문과
+    원문 재질문이 같은 문구 하나를 보인다(KB저축은행 오픈뱅킹 · 3런). 그래서
+    `rank_questions()` 가 유형 질문 대신 문구 질문을 내고, 여기서 그 답을 유형의
+    답으로 읽는다. **추측이 아니다** — 문구에 "예/아니오/모름" 으로 답했다는 것은 그
+    문구가 자기 이야기라는 뜻이고, 문구가 하나뿐이라 다른 갈래가 없다.
+
+    문구 질문 키는 유형과 무관하게 기관을 담는다(`clause_key` · force). 그래서 접두가
+    `유형@기관#` 이다.
+    """
+    prefix = f"{kind}@{company}#"
+    if company and any(k.startswith(prefix) and v is not None for k, v in state.items()):
+        return True
+    return None
+
+
+def clause_yes(kind: str, company: str, state: dict) -> bool:
+    """이 기관·유형의 **문구 질문에 "예"** 라고 답했나. 배타 유도(②)의 근거로만 쓴다.
+
+    승격된 유형(`prereg-18` §2.1)은 답이 문구 키에 들어가서 유형 키 `첫거래@기관` 이 상태에
+    없다. 그러면 유도 ②(첫거래 예 → 주거래 아니오)가 걸리지 않아 한 기관에서 두 조건을 동시에
+    받는 길이 다시 열린다 — F6(`0045`)이 고친 정확성 결함이다. **"예" 만 근거로 쓴다** — 문구
+    임계에 못 미친 "아니오" 를 첫거래 고객이라고 단정할 수 없기 때문이다.
+    """
+    prefix = f"{kind}@{company}#"
+    return bool(company) and any(k.startswith(prefix) and v is True for k, v in state.items())
+
+
 def answer_of(kind: str, company: str, state: dict):
     """이 기관에서 이 조건 유형의 답. **유도된 답까지 포함한다** (F6 · `prereg-15` §1).
 
@@ -345,12 +375,17 @@ def answer_of(kind: str, company: str, state: dict):
     *"거래해 본"* 의 뜻은 사용자가 정한다(`prereg-15` §4) — 우리가 좁히지 않는다.
     """
     if kind not in INSTITUTION_RELATIVE or not company:
-        return state.get(kind)
+        got = state.get(kind)
+        return got if got is not None else implied_answer(kind, company, state)
     key = f"{kind}@{company}"
     if key in state:
         return state[key]
+    implied = implied_answer(kind, company, state)
+    if implied is not None:
+        return implied
     other = MAIN_DEAL if kind == FIRST_DEAL else FIRST_DEAL if kind == MAIN_DEAL else ""
-    if other and state.get(f"{other}@{company}") is True:
+    if other and (state.get(f"{other}@{company}") is True
+                  or clause_yes(other, company, state)):
         return False                          # 유도 ② — 배타
     banks = traded_banks(state)
     if banks is None or banks == UNSURE:
@@ -398,9 +433,13 @@ def question_for(item: dict, state: dict) -> dict | None:
         return {"key": key, "kind": kind, "unit": "예아니오", "need": None,
                 "direction": None, "evidence": item.get("evidence") or ""}
     if answered is None:
+        # `후속` — 이 항목이 "예" 뒤에 낼 문구 질문 키. 없으면(임계 없음 · 계단식) None.
+        # `rank_questions()` 가 **유형 아래 문구가 하나뿐이고 그것이 임계 문구**인지를
+        # 이것으로 알아본다 (`prereg-18` §2.1)
         return {"key": type_key(kind, company), "kind": kind, "unit": "예아니오",
                 "need": None, "direction": None,
-                "evidence": item.get("evidence") or ""}
+                "evidence": item.get("evidence") or "",
+                "후속": threshold_question(item) if has_threshold(item) else None}
     return None
 
 
@@ -693,6 +732,7 @@ def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
     목록에 답하면 분모가 줄어들고, `questions_left()` 는 절대 늘어나지 않는다(A4).
     """
     plan: dict[str, set[str]] = {}
+    plain: dict[str, int] = {}                # 유형 키마다 **문구 질문이 안 붙는** 항목 수
     for row in rows:
         got = by_pair.get(row["pair_id"])
         if not got or not got.get("schema_ok"):
@@ -713,8 +753,17 @@ def question_plan(rows: list[dict], by_pair: dict) -> dict[str, set[str]]:
             q = threshold_question(it) if has_threshold(it) else None
             if q:
                 plan[key].add(q)              # 문구 단위 후속 질문 (`prereg-10`)
+            else:
+                plain[key] = plain.get(key, 0) + 1
     # 목록 질문 — 기관 상대 유형이 하나라도 있으면 **맨 먼저** 묻는다
-    if any("@" in k for k in plan):
+    has_relative = any("@" in k for k in plan)
+    # **문구 하나뿐인 임계 유형은 유형 질문을 건너뛴다** (`prereg-18` §2.1). 유형 질문과
+    # 원문 재질문이 같은 문구 하나를 보이므로 둘 중 하나는 정보가 없다. 문구 키가 유형
+    # 자리에 들어간다 — 질문 수는 하나 줄고, 답은 `implied_answer()` 가 유형에 옮긴다
+    for key in [k for k, subs in plan.items() if len(subs) == 1 and not plain.get(k)]:
+        (clause,) = plan.pop(key)
+        plan[clause] = set()
+    if has_relative:
         plan[TRADED_KEY] = set()
     return plan
 
@@ -746,8 +795,17 @@ def questions_left(plan: dict[str, set[str]], state: dict) -> int:
         if key == TRADED_KEY:                 # 목록 질문 하나 (F6)
             n += 0 if key in state else 1
             continue
-        kind, _at, company = key.partition("@")
+        base, _hash, _ = key.partition("#")            # 건너뛴 유형 자리의 문구 키 (`prereg-18`)
+        kind, _at, company = base.partition("@")
         answered = answer_of(kind, company, state)     # 유도된 답도 답이다
+        if _hash:
+            # **승격된 문구 키** — 유형이 유도로 "예" 여도(목록에 없는 기관의 첫거래) 문구는
+            # 물어야 한다. 화면 계약 검사 A6 이 이 자리를 잡았다(전부 아니오 · 9단계)
+            if key in state or answered is False or answered == UNSURE:
+                n += 0
+            else:
+                n += 1
+            continue
         if answered is None:
             n += 1 + len(subs)                # 아직 안 물었다 — 후속까지 상정한다
         elif answered is False or answered == UNSURE:
@@ -775,8 +833,14 @@ def rank_questions(scored: list[dict],
         for q in s.get("questions", []):
             slot = asks.setdefault(q["key"], {"unit": q["unit"], "products": set(),
                                               "needs": set(), "kind": q["kind"],
-                                              "evidence": set(), "출처": {}})
+                                              "evidence": set(), "출처": {},
+                                              "후속": set(), "무임계": False})
             slot["products"].add(product_key(s))
+            if "후속" in q:                        # 유형 질문만 이 칸을 갖는다
+                if q["후속"]:
+                    slot["후속"].add(q["후속"])
+                else:
+                    slot["무임계"] = True
             if q["need"] is not None:
                 slot["needs"].add(q["need"])
             if q["evidence"]:
@@ -798,13 +862,28 @@ def rank_questions(scored: list[dict],
                 # 문자열에서 나오므로 건드리면 답·세션·측정이 흔들린다).
                 slot["출처"].setdefault(q["evidence"], set()).add(
                     s.get("company") or "")
+    # **문구 하나뿐인 임계 유형은 문구 질문을 바로 낸다** (`prereg-18` §2.1 · 3런).
+    # 유형 질문과 재질문이 같은 문구 하나를 보이면 둘 중 하나는 정보가 없다. 슬롯은
+    # 그대로(상품 수·문구·출처) 키만 문구 키가 되고, `직접` 표시로 화면이 재질문
+    # 문장("아까 예라고 하셨는데") 대신 보통 문장을 쓴다. `0026` 과 충돌하지 않는다 —
+    # 사용자가 할 수 있는 대답의 집합은 그대로다
+    for key in [k for k, s in asks.items() if "#" not in k and not s["무임계"]
+                and len(s["evidence"]) == 1 and len(s["후속"]) == 1]:
+        slot = asks.pop(key)
+        (clause,) = slot["후속"]
+        slot["직접"] = True
+        if clause in asks:                    # 이론상 겹치지 않지만 조용히 잃지 않는다
+            asks[clause]["products"] |= slot["products"]
+        else:
+            asks[clause] = slot
     ordered = sorted(asks.items(), key=lambda kv: (-len(kv[1]["products"]), kv[0]))
 
     # **목록 질문이 맨 앞이다** (F6 · `prereg-15` §1). 순서 규칙을 깨는 것이 아니라
     # **이 질문만 다른 질문을 유도**하기 때문이다 — 답 하나가 안 고른 기관의 조건을
     # 전부 정하므로, 뒤에 물으면 이미 물어본 것을 다시 정하는 꼴이 된다.
     # `0018` 의 커버리지 순은 그 아래에서 그대로 돈다.
-    rel = [k for k, _ in ordered if "@" in k and "#" not in k]
+    rel = [k for k, s in ordered if s["kind"] in INSTITUTION_RELATIVE
+           and ("#" not in k or s.get("직접"))]
     if rel and (state is None or TRADED_KEY not in state):
         # **표기 이름 순으로 세운다** (F5) — 사용자가 눈으로 찾는 순서여야 한다.
         # `주식회사 카카오뱅크` 를 공시 이름으로 세우면 ㅈ 자리에 있는데 화면에는

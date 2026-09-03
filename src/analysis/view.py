@@ -116,7 +116,15 @@ def display(s: dict) -> dict:
         # 그대로 읽는다 — 아무도 안 읽는 칸을 늘리면 그게 드리프트가 자라는 자리다(`0039`)
         "주의": [C.caveat_label(c) for c in (s.get("caveats") or [])],
         "층": C.tier_label(s["tier"]),
+        # 같은 상품의 다른 행 — 적립방식·단리복리와 그 행의 범위 (`prereg-18` §2.3 · A16)
+        "다른_행": [f"{variant_label(o)} {L.span(o)}" for o in (s.get("_다른_행") or [])],
     }
+
+
+def variant_label(s: dict) -> str:
+    """행의 갈래 이름 — `정액적립식 · 단리`. 공시 칸 그대로라 빈 칸은 뺀다."""
+    return " · ".join(x for x in (s.get("rsrv_type") or "", s.get("rate_type") or "") if x) \
+        or "다른 조건"
 
 
 def next_question(scored: list[dict], state: dict) -> tuple[str | None, dict | None]:
@@ -197,7 +205,7 @@ def question_card(key: str | None, slot: dict | None) -> dict | None:
     # "하실 건가요", 섞인 유형은 둘을 병기한다. 옛 문장 "충족하십니까" 는 가입 뒤 할 일에
     # 쓰면 틀린 질문이었다 — 사람이 3런에서 짚었다
     꼬리말 = C.ask_tail(slot["kind"])
-    if "#" in key:
+    if "#" in key and not slot.get("직접"):
         # 원문 재질문 (이슈 #52). 옛 문장 *"위는 공시 문구 원문입니다"* 는 3런에서 안 읽혔다
         # (M3 ≥ 2) — 왜 같은 조건을 다시 묻는지가 없었다. 이 질문은 유형에 "예" 라고 답한
         # 뒤에만 나오고(`0024` P4), 문구에 기준(금액·횟수·기간)이 있어 따로 확인하는 것이다
@@ -233,7 +241,21 @@ def build(scored: list[dict], plan: dict, state: dict, total: int,
 
     main = L.ranked(scored, prefs, order)
     rest = [s for s in scored if s["tier"] not in C.MAIN_TIERS]
-    shown = main[:top] if top else main
+    # **같은 상품은 한 줄이다** (`0031` · `prereg-18` §2.3). 대표는 지금 정렬에서 가장
+    # 위에 오는 행이고, 나머지 행(적립방식·단리복리)은 그 줄 아래에 **전부** 적는다 —
+    # 숫자를 버리지 않는다. 지표(확정률·폭·게이트)는 행 단위 그대로다(`0031` 3항).
+    # `_다른_행` 은 `P.annotate()` 의 `_adj` 처럼 화면용 주석이다 — 매 build 마다 새로 쓴다
+    folded: list[dict] = []
+    first: dict[tuple, dict] = {}
+    for s in main:
+        pk = C.product_key(s)
+        if pk in first:
+            first[pk]["_다른_행"].append(s)
+        else:
+            s["_다른_행"] = []
+            first[pk] = s
+            folded.append(s)
+    shown = folded[:top] if top else folded
     _bar, st = L.status_lines(plan, state, scored, total, start, prefs, order)
 
     tally = {}
@@ -321,6 +343,15 @@ def check_model(vm: dict) -> list[dict]:
         # A14 — 코드가 아니라 **사람 말**이 화면으로 가야 한다 (F5 · 이슈 #45)
         if not r["라벨"] or r["라벨"] == r["코드"]:
             hit("A14", "-", f"사유 {r['코드']} 의 사용자용 라벨이 없다")
+
+    # A16 — 같은 상품이 목록에 두 줄 없다 (`0031` · `prereg-18` §2.3)
+    seen_pk: dict = {}
+    for s in vm["products"]:
+        pk = C.product_key(s)
+        if pk in seen_pk:
+            hit("A16", s["name"], f"같은 상품이 두 줄이다 — {seen_pk[pk]['rate_type']}/"
+                                   f"{seen_pk[pk]['rsrv_type']} 와 {s['rate_type']}/{s['rsrv_type']}")
+        seen_pk.setdefault(pk, s)
 
     # A8 — 성과 줄의 재료가 목록 1위와 같은 객체인가
     head, prods = vm["headline"]["상품"], vm["products"]
