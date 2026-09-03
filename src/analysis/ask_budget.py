@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,28 @@ from extract_llm import load_pairs  # noqa: E402
 # 무한 루프 방어. F6 뒤로 질문이 기관별로 갈려 은행권 90 · 저축은행 45 다
 # (`prereg-15` P5). 옛 값 60 은 곡선을 조용히 잘랐다
 MAX_STEPS = 400
+
+
+def snapshots(group: str) -> list[str]:
+    """권역에 추출 결과가 있는 스냅샷 날짜들 — 오래된 것부터.
+
+    파일 이름 규약(`extract_llm[_권역]_<YYYYMMDD>.json`)이 여기 한 곳에 있으므로
+    "최신이 무엇인가" 도 여기서 답한다. `v1` 같은 변형 파일은 뺀다 — 날짜 자리가
+    숫자 8자리인 것만 스냅샷이다.
+    """
+    suffix = "" if group == "bank" else f"_{group}"
+    pat = re.compile(rf"^extract_llm{re.escape(suffix)}_(\d{{8}})\.json$")
+    found = [m.group(1) for p in C.OUT_DIR.glob(f"extract_llm{suffix}_*.json")
+             if (m := pat.match(p.name))]
+    return sorted(found)
+
+
+def latest_snapshot(group: str) -> str:
+    """권역별 최신 스냅샷. 없으면 CLI 처럼 SystemExit — 서버는 400 으로 바꾼다."""
+    found = snapshots(group)
+    if not found:
+        raise SystemExit(f"추출 결과가 없다: {group} 권역 스냅샷 0개")
+    return found[-1]
 
 
 def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:

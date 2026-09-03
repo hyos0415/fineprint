@@ -89,12 +89,30 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
     return _CACHE[key]
 
 
+def resolve_snapshot(stamp: str | None, group: str) -> str:
+    """비어 있으면 **권역별 최신**을 고른다 (이슈 #52).
+
+    옛 폼은 권역과 무관하게 `20260826` 을 기본값으로 박아 두어 저축은행을 고른 사람이
+    첫 화면에서 *"추출 결과가 없다"* 로 막혔다(3런 · `prereg-16`). 날짜를 적으면 그대로
+    쓴다 — 옛 스냅샷으로 재현하는 길은 남긴다.
+    """
+    if stamp and stamp.strip():
+        return stamp.strip()
+    try:
+        return AB.latest_snapshot(group)
+    except SystemExit as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 class ScreenRequest(BaseModel):
     """화면 한 장을 받으려고 보내는 것. **답(state)까지 여기 실린다** — 무상태다."""
 
     model_config = ConfigDict(extra="forbid")
 
-    snapshot: str = Field(..., description="스냅샷 날짜 YYYYMMDD", examples=["20260826"])
+    snapshot: str | None = Field(
+        None, description="스냅샷 날짜 YYYYMMDD. **비우면 권역별 최신** — 저축은행은 은행권과 "
+                          "날짜가 다르다(20260825 vs 20260826). 이슈 #52",
+        examples=["20260826"])
     group: Literal["bank", "savingsbank"] = "bank"
     term: int = Field(12, ge=1, le=60, description="가입 기간(개월)")
     company: str | None = Field(None, description="기관 스코프 — 쉼표로 여럿 (`0028`)")
@@ -153,6 +171,8 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
     `/api/screen` 과 `POST /screen`(HTML)이 이 함수를 공유하므로 둘이 갈라질 자리가
     없다 — `0035` 가 찾은 실패("문구가 두 곳에 있었다")를 구조로 막는다.
     """
+    if not req.snapshot:
+        req.snapshot = resolve_snapshot(None, req.group)
     rows_all, by_pair = load(req.snapshot, req.group, req.term)
     tax = C.load_tax()
     try:
@@ -206,7 +226,12 @@ def start() -> str:
     """폼이다. **자유 입력이 아니다** — 자유 입력(R2)은 `0042` 로 따로 정해 뒀고,
     그때는 로컬 모델이 첫 수신자가 되어야 한다.
     """
-    return RENDER.render_start()
+    return RENDER.render_start(snapshots=_snapshot_menu())
+
+
+def _snapshot_menu() -> dict[str, list[str]]:
+    """권역별로 있는 스냅샷 — 폼이 "비우면 최신" 옆에 무엇이 최신인지 적는 데 쓴다."""
+    return {g: AB.snapshots(g) for g in ("bank", "savingsbank")}
 
 
 @app.post("/screen", response_class=HTMLResponse, summary="화면 하나 (HTML)")
@@ -241,7 +266,7 @@ async def screen_html(request: Request) -> str:
     try:
         return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start(f, str(e.detail)),
+        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu()),
                             status_code=e.status_code)
 
 
@@ -296,7 +321,8 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
     order = get("order", "hi") or "hi"
     if order not in ("hi", "lo"):
         raise HTTPException(status_code=400, detail=f"모르는 정렬: {order}")
-    form = {"snapshot": get("snapshot", "20260826"), "group": get("group", "bank"),
+    group = get("group", "bank") or "bank"
+    form = {"snapshot": resolve_snapshot(get("snapshot"), group), "group": group,
             "term": term, "company": company, "kinds": kinds, "prefs": prefs_arg,
             "order": order,
             "state_json": json.dumps(state, ensure_ascii=False)}
@@ -341,6 +367,10 @@ def _prefs_from_form(f) -> str:
     for name in list(P.AXES) + [P.LIST_AXIS]:
         v = f.get(f"pref_{name}")
         if isinstance(v, str) and v.strip():
+            if name == P.LIST_AXIS:
+                # 쉼표·공백으로 적은 목록을 LIST_SEP 로 이어야 `--prefs` 의 축 구분자
+                # `,` 와 안 섞인다 (이슈 #52)
+                v = P.LIST_SEP.join(P.split_list(v))
             parts.append(f"{name}={v.strip()}")
     return ",".join(parts)
 
