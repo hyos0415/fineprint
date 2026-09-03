@@ -126,6 +126,12 @@ def build(s: dict, rank: int, prefs: dict | None = None) -> dict:
         "상품상한": s.get("cap"),
         "근거없는_%p": s.get("unexplained_pp") or 0.0,
         "조건": {"채운": why["met"], "못채운": why["unmet"], "안답한": why["unknown"]},
+        # **이 금리가 어떤 약속 위에 서 있나** (이슈 #50 · `prereg-17`). 채운 조건 중
+        # 시제가 행동·중립인 것 — 사용자가 "하겠다" 고 답한 것들이다. 은행권 확정 50개 중
+        # 44개가 여기에 기댄다(T4). 가입 뒤에 하는지는 우리 일이 아니지만, 숫자의 전제를
+        # 밝히는 것까지는 우리 일이다
+        "전제": [c for c in why["met"] if C.is_commitment(c["type"])],
+        "전제_문장": C.PREMISE_NOTE,
         "사유": [{"코드": c, "라벨": C.caveat_label(c), "문장": t}
                for c, t in zip(s.get("caveats") or [], s.get("caveat_text") or [])],
         "정렬": order,
@@ -220,8 +226,15 @@ def render(rep: dict) -> str:
             out.append(f"      ⚠ 우리가 뽑은 우대가 공시 폭보다 {-v:.2f}%p 많다 — "
                        f"추출이 과다할 수 있다")
 
+    # 전제 — 사용자가 "하겠다" 고 답한 조건. **"이미 받는다" 는 이 조건들에는 거짓이다**
+    if rep["전제"]:
+        out.append("")
+        out.append(f"    ※ {rep['전제_문장']}")
+        for c in rep["전제"]:
+            out.append(f"      · {c['이름']}  ({c['pp']:+.2f}%p)")
+
     out.append("")
-    out += _conditions("채운 조건 — 이미 받는다", rep["조건"]["채운"])
+    out += _conditions("채운 조건 — 답한 대로면 받는다", rep["조건"]["채운"])
     out += _conditions("아직 안 답한 조건", rep["조건"]["안답한"],
                        "  — 답하면 범위가 좁아진다")
     out += _conditions("못 채운 조건 — 이 금리는 못 받는다", rep["조건"]["못채운"])
