@@ -277,6 +277,22 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
         v = f.get(name, default)
         return v if isinstance(v, str) else default
 
+    # **이어하기 코드** (D9 · 이슈 #67 · `prereg-24`). 0단계 폼에 붙여 넣은 코드가 있으면 그 안의
+    # 스냅샷·권역·기간·스코프·선호·정렬·답이 폼의 다른 칸을 **덮는다** — 코드가 곧 그때의 화면이다.
+    # 서버는 코드를 저장하지 않는다(`0040`). 잘못된 코드는 여기서 400 을 던지고, 위에서 HTML 로 바뀐다
+    code = get("resume_code").strip()
+    if code:
+        try:
+            saved = json.loads(code)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="이어하기 코드를 읽을 수 없다 — 화면 아래 "
+                                                        "'이어하기 코드' 상자의 내용을 통째로 붙여 주세요") from None
+        if not isinstance(saved, dict) or not isinstance(saved.get("state"), dict):
+            raise HTTPException(status_code=400, detail="이어하기 코드의 모양이 다르다 (state 가 없다)")
+        f = {**f, **{k: ("" if saved.get(k) is None else str(saved[k]))
+                     for k in RESUME_KEYS if k != "state"},
+             "state_json": json.dumps(saved["state"], ensure_ascii=False)}
+
     try:
         state = json.loads(get("state_json", "{}") or "{}")
     except json.JSONDecodeError:
@@ -334,7 +350,21 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
         # 문장은 뷰 모델이 든다 — 한쪽만 쓰는 낱말을 만들지 않는다 (`0039` 반증 조건 1)
         cur = vm["questions"].get("현재") or {}
         notice = cur.get("빈_제출_안내") or "은행을 하나 이상 골라 주세요"
-    return RENDER.render_screen(vm, form, reports, notice)
+    return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state))
+
+
+# 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다
+RESUME_KEYS = ("snapshot", "group", "term", "company", "kinds", "prefs", "order", "state")
+
+
+def resume_code(form: dict, state: dict) -> str:
+    """**이어하기 코드** — 화면 하나를 다시 만들 수 있는 JSON 한 덩이 (D9).
+
+    서버가 만들고 템플릿은 꽂기만 한다(`0043`). 저장하지 않는다 — 사용자가 든다(`0040`).
+    한 줄로 낸다 — 붙여 넣을 때 줄바꿈이 끼어도 JSON 은 상관없지만, 상자 안에서 한눈에 보이게
+    """
+    return json.dumps({**{k: form.get(k) for k in RESUME_KEYS if k != "state"}, "state": state},
+                      ensure_ascii=False)
 
 
 async def _form(request: Request) -> dict[str, list[str]]:

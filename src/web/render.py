@@ -65,7 +65,7 @@ def render_start(form: dict | None = None, error: str | None = None,
 
 
 def render_screen(vm: dict, form: dict, reports: list[dict],
-                  notice: str | None = None) -> str:
+                  notice: str | None = None, resume_code: str = "") -> str:
     """**검사가 부르는 함수.** 뷰 모델 하나가 화면 하나가 된다.
 
     `form` 은 다음 요청에 그대로 실어 보낼 것들이다 — 스냅샷·권역·기간·스코프·선호와
@@ -80,4 +80,6 @@ def render_screen(vm: dict, form: dict, reports: list[dict],
         vm=vm, rows=rows, form=form, reports=reports,
         state_json=form.get("state_json", "{}"),
         notice=notice,
+        # 이어하기 코드 (D9) — 서버가 만든 문자열. 비면 상자를 안 그린다(검사가 부를 때)
+        resume_code=resume_code,
     )

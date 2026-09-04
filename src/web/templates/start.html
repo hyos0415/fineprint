@@ -96,6 +96,16 @@
            placeholder="예: 우리, 농협">
   </div>
 
+  {# 이어하기 (D9 · `prereg-24`) — 답은 서버에 남지 않으므로 사용자가 든 코드로 돌아온다.
+     코드가 있으면 위의 칸들은 코드 안의 값으로 덮인다 (서버가 그렇게 한다 · 템플릿은 안 판정) #}
+  <h2>이어서 답하기 <span class="notice">(선택)</span></h2>
+  <div>
+    <label for="resume_code">이어하기 코드 — 전에 결과 화면 아래에서 복사한 것</label>
+    <textarea id="resume_code" name="resume_code" rows="3" style="width:100%; font:12px/1.4 monospace"
+              placeholder='{"snapshot": ..., "state": {...}}'>{{ form.get('resume_code', '') }}</textarea>
+    <span class="notice">붙여 넣으면 위에서 고른 것은 무시되고 그때의 화면이 그대로 이어집니다.</span>
+  </div>
+
   <p style="margin-top:22px"><button class="primary" type="submit">목록 보기</button></p>
 </form>
 
