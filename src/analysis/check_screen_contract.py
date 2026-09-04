@@ -44,6 +44,9 @@
         (스킴만 보정)여야 한다** (F3 · `0037` · `prereg-21`) — 링크는 정보이고 우리가 붙인
         파라미터가 있으면 "이익을 얻을 목적" 쪽으로 성격이 바뀐다. 모델 겹은 재료와 URL
         충실성을, 렌더 겹(CLI·웹)은 실제로 그렸는지를 본다
+    A18 **가입 금액이 있으면 리포트(텍스트·웹)에 예상 이자가 세전·세후 원 숫자와 가정 한 줄로 있어야
+        하고, 금액이 없으면 예상 이자 칸이 없어야 한다** (E4 · `prereg-25`) — 원 단위 숫자도 %와 같이
+        무엇을 말하는 숫자인지 밝혀야 한다(A12 와 같은 태도). 검사는 예금 5천만원 · 적금 월 100만원을 넣고 본다
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -168,6 +171,33 @@ def check_org_names(text: str, scored: list[dict], where: str) -> list[dict]:
     return bad
 
 
+# A18 이 리포트·웹에 넣는 가입 금액 — 예금 5천만원 · 적금 월 100만원 (`prereg-25` P2 의 "현실적 금액")
+CHECK_AMOUNTS = {"예금": 50_000_000, "적금": 1_000_000}
+
+
+def check_interest(reports: list[dict], text: str) -> list[tuple[str, str]]:
+    """A18 — 리포트에 예상 이자가 있으면 **세전·세후 원 숫자와 가정 문장**이 화면 글자에 있어야 한다.
+
+    `(상품, 사유)` 목록을 돌려준다. 원 숫자는 `calculate.won()` 과 같은 표기로 찾는다 — 웹은 템플릿이
+    `{:,.0f}원` 으로 그리므로 같은 문자열이 나온다. 다르면 그것이 위반이다(한쪽만 다른 표기).
+    """
+    bad = []
+    for rep in reports:
+        it = rep.get("이자")
+        if not it:
+            bad.append((rep["상품"], "금액을 줬는데 예상 이자가 없다"))
+            continue
+        for label, (lo, hi) in (("세전", it["세전"]), ("세후", it["세후"])):
+            for v in {lo, hi}:
+                if C.won(v) not in text:
+                    bad.append((rep["상품"], f"{label} 예상 이자 {C.won(v)} 가 화면에 없다"))
+        if it["가정"] not in text:
+            bad.append((rep["상품"], "예상 이자의 가정 문장이 화면에 없다"))
+        if it["종합과세_문장"] and it["종합과세_문장"] not in text:
+            bad.append((rep["상품"], "종합과세 판정 문장이 화면에 없다"))
+    return bad
+
+
 def check_labels(screen: str) -> list[dict]:
     """A12·A13 — 화면이 **무엇을 말하는 숫자인지**와 **자기가 무엇인지**를 밝히나.
 
@@ -207,7 +237,8 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
     import report as R
 
     vm = V.build(scored, plan, state, total, 10, outside, None, None, prefs, order)
-    reports = [R.build(s, i, prefs) for i, s in enumerate(vm["products"], 1)]
+    # 가입 금액을 **넣고** 검사한다 (E4 · A18) — 안 넣으면 예상 이자 칸이 검사 밖에 남는다
+    reports = [R.build(s, i, prefs, CHECK_AMOUNTS) for i, s in enumerate(vm["products"], 1)]
     form = {"snapshot": "-", "group": "-", "term": 12, "order": order,
             "state_json": "{}"}
     html = RENDER.render_screen(vm, form, reports)
@@ -256,6 +287,8 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
         if rep["전제"] and C.PREMISE_NOTE not in html:
             bad += hit("A15", rep["상품"], "행동 조건에 기댄 금리인데 전제 문장이 없다")
             break
+    # A18 — 예상 이자(원)가 있으면 세전·세후 원 숫자와 가정 한 줄이 화면에 있어야 한다 (E4)
+    bad += [hit("A18", p, d)[0] for p, d in check_interest(reports, seen)]
     # A3 — 사유는 **문장**으로 나가야 한다. 그리고 태그는 **라벨**이어야 한다 (A14)
     for r in vm["notices"]["사유"]:
         if r["문장"] not in html:
@@ -296,11 +329,19 @@ def check_report(scored: list[dict], top: int, prefs: dict | None,
     아무것도 안 답한 상태에서 본다.
     """
     import report as R
-    text = R.render_all(scored, top, prefs)
+    text = R.render_all(scored, top, prefs, CHECK_AMOUNTS)
     bad = [{**v, "detail": f"[리포트] {v['detail']}", "session": tag, "step": -1}
            for v in (check_labels(text) + check_words(text, "리포트")
                      + check_org_names(text, scored, "리포트"))]
     main = L.ranked(scored, prefs)[:top]
+    # A18 — 리포트 텍스트에도 예상 이자의 세전·세후·가정이 있어야 한다 (E4)
+    bad += [{"assert": "A18", "product": p, "session": tag, "step": -1, "detail": f"[리포트] {d}"}
+            for p, d in check_interest([R.build(s, i, prefs, CHECK_AMOUNTS)
+                                        for i, s in enumerate(main, 1)], text)]
+    # 금액이 없으면 예상 이자 칸이 **없어야** 한다 — 없는 숫자를 만들지 않는다
+    if "예상 이자" in R.render_all(scored, top, prefs):
+        bad.append({"assert": "A18", "product": "-", "session": tag, "step": -1,
+                    "detail": "[리포트] 금액이 없는데 예상 이자가 있다"})
     for s in main:
         rep = R.build(s, 1, prefs)
         block = R.render(rep)
@@ -626,7 +667,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A14", "내부 이름이 화면에 없다"),
                        ("A15", "행동 조건에 기댄 금리는 전제를 말한다"),
                        ("A16", "같은 상품은 한 줄 · 다른 행의 숫자는 남는다"),
-                       ("A17", "기관 링크·전화가 있고 URL 은 API 값 그대로다")):
+                       ("A17", "기관 링크·전화가 있고 URL 은 API 값 그대로다"),
+                       ("A18", "예상 이자(원)에는 세전·세후 라벨과 가정이 붙는다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue

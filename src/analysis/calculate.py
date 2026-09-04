@@ -1094,6 +1094,73 @@ PREMISE_NOTE = "이 금리는 다음을 하는 것을 전제로 합니다"
 
 # 남기고 **설명만 붙이는** 낱말. 화면에서 없애지 않는다 — 정확해서 필요하다
 PP_NOTE = "%p 는 퍼센트포인트 — 금리의 차이입니다 (3.0% → 3.5% 가 +0.5%p)"
+
+# ── 예상 이자 (E4 첫 조각 · 이슈 #69 · `prereg-25`)
+#
+# 가입 금액을 받으면 상품마다 세전·세후 이자를 **원**으로 낸다. 금리는 다시 계산하지 않는다 —
+# `evaluate()` 가 낸 `gross_lo`·`gross_hi`·`tax_rate` 위의 산수다. 가정 셋은 화면에 한 줄로 나간다.
+INTEREST_NOTE = ("예상 이자는 만기에 한 번 받는 것으로 보고, 복리는 월복리로, 자유적립식은 매달 같은 금액을 "
+                 "넣는 것으로 계산한 값입니다")
+# 3층(금융소득종합과세) 게이트 문장 — `design.md` "선을 넘을 때만" · 최종 세액은 내지 않는다
+OVER_LINE_NOTE = ("이 상품 이자만으로 금융소득종합과세 기준(연 {limit})을 넘습니다 — "
+                  "세후는 다른 소득에 따라 더 낮아질 수 있습니다")
+NEAR_LINE_NOTE = ("금융소득종합과세 기준(연 {limit})의 절반을 넘습니다 — 다른 이자·배당이 있으면 선을 넘을 수 있습니다")
+NEAR_LINE_SHARE = 0.5      # "경계에 가깝다" 의 문턱. 근거 없음 — 판단 (`prereg-25` §2)
+
+
+def won(v: float) -> str:
+    return f"{v:,.0f}원"
+
+
+def parse_amount(raw: str) -> int:
+    """`5천만원` · `50,000,000` · `100만원` 을 원으로. 못 읽으면 SystemExit — 추측하지 않는다.
+    긴 단위를 먼저 본다(`MONEY_UNIT` 주석 — "천만원" 을 "만원" 으로 읽으면 1,000배 오차)."""
+    t = (raw or "").strip().replace(",", "").replace(" ", "")
+    if not t:
+        raise SystemExit("금액이 비어 있다")
+    m = re.fullmatch(r"(\d+)(천만원|백만원|십만원|억원|만원|천원|억|원)?", t)
+    if not m:
+        raise SystemExit(f"금액을 읽을 수 없다: {raw!r} — 예: 5천만원 · 50000000 · 100만원")
+    return int(m.group(1)) * MONEY_UNIT.get(m.group(2) or "원", 1)
+
+
+def interest(s: dict, amounts: dict | None, tax: dict) -> dict | None:
+    """상품 하나의 **예상 이자**(원). 금액이 없으면 None.
+
+    `amounts` 는 `{"예금": 예치 금액, "적금": 월 납입액}` 이고 상품군에 맞는 쪽만 쓴다.
+    세전은 금리 범위(`gross_lo`~`gross_hi`) 그대로 두 값이고, 세후는 그 상품의 세율(`tax_rate`)을 뗀 값이다.
+    3층 판정은 **세전 최대**로 한다 — 넘는지를 보수적으로 본다.
+    """
+    if not amounts:
+        return None
+    amt = amounts.get(s["kind"])
+    if not amt or amt <= 0:
+        return None
+    n = int(s["term"])
+    compound = (s.get("rate_type") or "") == "복리"
+
+    def gross(rate_pct: float) -> float:
+        r = rate_pct / 100.0
+        if s["kind"] == "예금":
+            return amt * ((1 + r / 12) ** n - 1) if compound else amt * r * n / 12
+        # 적금 — 매달 m 씩, k 번째 납입은 n-k+1 개월 이자. 정액·자유 모두 같은 금액으로 본다
+        if compound:
+            return sum(amt * ((1 + r / 12) ** k - 1) for k in range(1, n + 1))
+        return amt * r * n * (n + 1) / 24
+
+    lo, hi = gross(s["gross_lo"]), gross(s["gross_hi"])
+    rate = s["tax_rate"]
+    limit = tax["금융소득종합과세"]["기준금액_원"]
+    if hi >= limit:
+        gate, note = "넘음", OVER_LINE_NOTE.format(limit=won(limit))
+    elif hi >= limit * NEAR_LINE_SHARE:
+        gate, note = "경계 근처", NEAR_LINE_NOTE.format(limit=won(limit))
+    else:
+        gate, note = "안 넘음", ""
+    return {"금액": amt, "금액_뜻": "예치 금액" if s["kind"] == "예금" else "월 납입액",
+            "개월": n, "방식": "복리(월복리로 계산)" if compound else "단리",
+            "세전": (round(lo), round(hi)), "세후": (round(lo * (1 - rate)), round(hi * (1 - rate))),
+            "종합과세": gate, "종합과세_문장": note, "기준_원": limit, "가정": INTEREST_NOTE}
 BONUS_NOTE = "우대조건은 조건을 채우면 금리를 더 주는 것입니다"
 
 
@@ -1540,8 +1607,10 @@ def main() -> None:
     group, term, top, state_arg, order = "bank", 12, 10, "", "hi"
     company, kinds, prefs_arg, report_n = None, None, None, 0
     banks_arg = None                     # F6 — 거래해 본 기관 목록
+    amounts: dict = {}                   # E4 — 가입 금액 (예금 예치 · 적금 월 납입). 표시에만 쓴다
     for flag in ("--group", "--term", "--top", "--state", "--sort",
-                 "--company", "--kind", "--prefs", "--report", "--banks"):
+                 "--company", "--kind", "--prefs", "--report", "--banks",
+                 "--deposit", "--monthly"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -1557,13 +1626,16 @@ def main() -> None:
             prefs_arg = v if flag == "--prefs" else prefs_arg
             report_n = int(v) if flag == "--report" else report_n
             banks_arg = v if flag == "--banks" else banks_arg
+            if flag in ("--deposit", "--monthly"):
+                amounts["예금" if flag == "--deposit" else "적금"] = parse_amount(v)
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/calculate.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--state 유형,유형] "
                          "[--sort hi|lo] [--top 10] [--company 우리,농협] [--kind 적금]\n"
                          "        [--banks 국민은행,케이뱅크 | --banks 없음] "
-                         "[--prefs 확실성=많이,...] [--report 3] [--survey]")
+                         "[--prefs 확실성=많이,...] [--report 3] [--survey]\n"
+                         "        [--deposit 5천만원 | 50000000] [--monthly 100만원]   (예상 이자 · E4)")
     if order not in ("hi", "lo"):
         raise SystemExit("--sort 는 hi (다 채웠을 때 순) 또는 lo (확정된 값 순) 다")
     import prefs as _P                   # 파싱만 먼저 — 잘못된 값을 일찍 잡는다
@@ -1840,7 +1912,7 @@ def main() -> None:
         print("\n" + "=" * 96)
         print(f"■ 비교 리포트 — 상위 {report_n}개")
         print("=" * 96)
-        print(R.render_all(scored, report_n, prefs))
+        print(R.render_all(scored, report_n, prefs, amounts or None))
 
     out.write_text(json.dumps({"snapshot": stamp, "group": group, "term": term,
                                "state": state, "tax": tax["적용_시점"],
