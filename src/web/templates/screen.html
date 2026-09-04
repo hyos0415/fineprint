@@ -138,7 +138,15 @@
     <td class="mono">{{ loop.index }}</td>
     <td>{{ r['이름'] }}<div class="notice">{{ r['기관'] }}</div>
       {# 같은 상품의 다른 행 — 적립방식·단리복리별 범위 (A16 · `prereg-18`) #}
-      {% for v in r['다른_행'] %}<div class="notice">└ {{ v }}</div>{% endfor %}</td>
+      {% for v in r['다른_행'] %}<div class="notice">└ {{ v }}</div>{% endfor %}
+      {# 기관 홈페이지·대표전화 (F3 · A17 · `0037`) — 링크만 준다. URL 은 뷰 모델이 정한 값
+         그대로고 여기서 아무것도 덧붙이지 않는다(추적 파라미터 금지). 전화는 API 값 그대로를
+         보이고 `tel:` 로 눌러서 걸리게 한다. 빈 칸은 빈 칸이다 #}
+      <div class="notice">
+        {% if r['홈페이지'] %}<a href="{{ r['홈페이지'] }}" rel="noopener noreferrer" target="_blank">{{ r['홈페이지'] }}</a>{% endif %}
+        {% if r['홈페이지'] and r['전화'] %} · {% endif %}
+        {% if r['전화'] %}<a href="tel:{{ r['전화'] }}">{{ r['전화'] }}</a>{% endif %}
+      </div></td>
     <td class="rate mono">{{ r['범위'] }}</td>
     <td>{% if r['채널'] %}<span class="tag">{{ r['채널'] }}</span>{% endif %}</td>
     <td>{{ r['남은'] }}

@@ -228,7 +228,13 @@ def product_line(i: int, s: dict, prev: list[str] | None = None) -> str:
     line = (f"  {i:>2}. {s['name'][:24]:<25}{d['범위']:>15}{ch:<16}{left:<22}"
             f"{adj}{move}{note}")
     # 같은 상품의 다른 행 (`prereg-18` §2.3 · A16) — 웹도 같은 문자열을 그린다
-    return "\n".join([line] + [f"      └ {v}" for v in d["다른_행"]])
+    lines = [line] + [f"      └ {v}" for v in d["다른_행"]]
+    # 기관 홈페이지·대표전화 (F3 · A17) — 웹의 `href`·`tel:` 과 **같은 칸**을 읽는다. 있는 것만
+    # 적고 없는 칸은 비운다(`prereg-20` §4). 여기서 "은행에 확인해 보세요" 가 갈 곳을 얻는다
+    contact = " · ".join(x for x in (d["홈페이지"], d["전화"]) if x)
+    if contact:
+        lines.append(f"      ↳ {contact}")
+    return "\n".join(lines)
 
 
 def show_list(items: list[dict], top: int | None, prev: list[str] | None = None) -> None:

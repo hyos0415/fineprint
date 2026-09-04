@@ -40,6 +40,10 @@
     A16 **같은 상품(기관코드+상품코드)이 목록에 두 줄 없어야 하고, 합쳐진 행의 금리
         범위는 화면에 남아 있어야 한다** (`0031` · `prereg-18` §2.3) — 수협 2줄 ·
         디비저축은행 4줄이 3런에서 났다. 지표는 행 단위 그대로다
+    A17 **목록의 모든 상품에 기관 홈페이지·대표전화가 화면에 있고, URL 은 API 값 그대로
+        (스킴만 보정)여야 한다** (F3 · `0037` · `prereg-21`) — 링크는 정보이고 우리가 붙인
+        파라미터가 있으면 "이익을 얻을 목적" 쪽으로 성격이 바뀐다. 모델 겹은 재료와 URL
+        충실성을, 렌더 겹(CLI·웹)은 실제로 그렸는지를 본다
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -75,6 +79,7 @@
 """
 from __future__ import annotations
 
+import html as _html
 import json
 import random
 import re
@@ -237,6 +242,14 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
         for v in V.display(s)["다른_행"]:
             if v not in seen:
                 bad += hit("A16", s["name"], f"다른 행 '{v}' 가 화면에 없다")
+        # A17 — 홈페이지는 **눌러서 열리는 링크**(href)로, 전화는 글자로 화면에 있어야 한다 (F3).
+        # href 는 태그 속성이라 `visible()` 이 지우므로 원본 HTML 에서 본다 — 여기서 확인하는
+        # 것이 정확히 "눌러서 열리는가" 다(사람 결정 · 2026-09-04)
+        d = V.display(s)
+        if d["홈페이지"] and f'href="{_html.escape(d["홈페이지"])}"' not in html:
+            bad += hit("A17", s["name"], f"홈페이지 링크 {d['홈페이지']} 가 href 로 없다")
+        if d["전화"] and d["전화"] not in seen:
+            bad += hit("A17", s["name"], f"대표전화 {d['전화']} 가 화면에 없다")
     # A15 — 행동 조건에 기댄 금리는 전제를 말한다 (이슈 #50). 리포트 겹이 아니라
     # **웹 렌더러가 그렸는지**를 본다 — 모델에 있어도 안 그리면 위반이다(`0039`)
     for rep in reports:
@@ -337,6 +350,13 @@ def check_state(screen: str, scored: list[dict], tax: dict,
         if s["net_hi"] > net_cap + EPS:
             bad.append({"assert": "A5", "product": s["name"],
                         "detail": f"net_hi {s['net_hi']:.4f} > 공시 상한(세후) {net_cap:.4f}"})
+        # A17 — 기관 홈페이지·대표전화가 **화면 문자열**에 있나 (F3). 뷰 모델에 있어도 CLI 가
+        # 안 그리면 위반이다 — 재료가 있는지는 모델 겹(`view.check_model`)이 본다
+        d = V.display(s)
+        for 칸 in ("홈페이지", "전화"):
+            if d[칸] and d[칸] not in screen:
+                bad.append({"assert": "A17", "product": s["name"],
+                            "detail": f"{칸} {d[칸]} 가 화면에 없다"})
     shown = {c for s in main for c in s.get("caveats", [])}
     for code in sorted(shown & set(A3_CODES)):
         if C.CAVEAT[code] not in screen:
@@ -605,7 +625,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A13", "화면이 자기가 무엇인지 밝힌다"),
                        ("A14", "내부 이름이 화면에 없다"),
                        ("A15", "행동 조건에 기댄 금리는 전제를 말한다"),
-                       ("A16", "같은 상품은 한 줄 · 다른 행의 숫자는 남는다")):
+                       ("A16", "같은 상품은 한 줄 · 다른 행의 숫자는 남는다"),
+                       ("A17", "기관 링크·전화가 있고 URL 은 API 값 그대로다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue
