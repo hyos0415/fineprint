@@ -204,6 +204,17 @@
   {% if rep['근거없는_%p'] %}
   <p class="notice warn">⚠ 근거 없는 폭 {{ '%+.2f'|format(rep['근거없는_%p']) }}%p</p>
   {% endif %}
+  {# 예상 이자 (E4 · A18) — 원 단위 숫자에는 세전·세후 라벨과 가정 한 줄이 붙는다. 숫자·판정은 리포트가 든다 #}
+  {% if rep['이자'] %}
+  {% set it = rep['이자'] %}
+  <p><b>예상 이자</b> <span class="notice">{{ it['금액_뜻'] }} {{ '{:,.0f}'.format(it['금액']) }}원 · {{ it['개월'] }}개월 · {{ it['방식'] }}</span></p>
+  <table class="mono">
+    <tr><td>세전</td><td>{{ '{:,.0f}'.format(it['세전'][0]) }}원{% if it['세전'][1] != it['세전'][0] %} ~ {{ '{:,.0f}'.format(it['세전'][1]) }}원{% endif %}</td></tr>
+    <tr><td>세후</td><td>{{ '{:,.0f}'.format(it['세후'][0]) }}원{% if it['세후'][1] != it['세후'][0] %} ~ {{ '{:,.0f}'.format(it['세후'][1]) }}원{% endif %}</td></tr>
+  </table>
+  {% if it['종합과세_문장'] %}<p class="notice warn">⚠ {{ it['종합과세_문장'] }}</p>{% endif %}
+  <p class="notice">{{ it['가정'] }}</p>
+  {% endif %}
   {# 전제 — 사용자가 "하겠다" 고 답한 조건 (이슈 #50). 문장은 뷰 모델(리포트)이 든다 #}
   {% if rep['전제'] %}
   <p class="notice warn">※ <b>{{ rep['전제_문장'] }}</b></p>

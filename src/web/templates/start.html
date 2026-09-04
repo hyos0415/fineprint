@@ -74,6 +74,23 @@
   </div>
   <p class="notice">좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
 
+  {# 가입 금액 (E4 · `prereg-25`) — 있으면 상품마다 예상 이자(세전·세후 · 원)를 낸다.
+     금리·순서에는 들어가지 않는다. 판정(넘음·경계)은 서버가 하고 여기는 받기만 한다 #}
+  <h2>얼마를 넣으실 건가요 <span class="notice">(선택 — 예상 이자를 원 단위로 보여줍니다)</span></h2>
+  <div class="row">
+    <div class="grow">
+      <label for="amount_deposit">예금 — 한 번에 넣을 금액</label>
+      <input id="amount_deposit" type="text" name="amount_deposit" value="{{ form.get('amount_deposit', '') }}"
+             placeholder="예: 5천만원 또는 50000000">
+    </div>
+    <div class="grow">
+      <label for="amount_monthly">적금 — 매달 넣을 금액</label>
+      <input id="amount_monthly" type="text" name="amount_monthly" value="{{ form.get('amount_monthly', '') }}"
+             placeholder="예: 100만원 또는 1000000">
+    </div>
+  </div>
+  <p class="notice">금액은 <b>예상 이자를 보여주는 데만</b> 씁니다 — 금리와 순서는 바뀌지 않습니다.</p>
+
   <h2>무엇을 중요하게 보시나요 <span class="notice">(선택 — 답한 것만 순서에 반영됩니다)</span></h2>
   <p class="notice">여기 답한 것은 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
   {% for key, axis in 축.items() %}

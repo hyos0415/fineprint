@@ -129,6 +129,9 @@ class ScreenRequest(BaseModel):
         description="지금까지의 답. `{조건유형: true|false|\"모름\"}` 또는 수치. "
                     "**서버에 저장하지 않는다** — 매 요청에 실어 보낸다",
     )
+    # 가입 금액 (E4 · 이슈 #69). **표시에만 쓴다** — 금리·순서·판정은 안 바뀐다 (`prereg-25` P1)
+    amount_deposit: int | None = Field(None, ge=0, description="예금 예치 금액(원). 있으면 리포트에 예상 이자")
+    amount_monthly: int | None = Field(None, ge=0, description="적금 월 납입액(원)")
 
 
 class ScreenResponse(BaseModel):
@@ -217,7 +220,8 @@ def _screen_payload(req: "ScreenRequest") -> tuple[dict, list[dict]]:
                  if len(rows) < len(rows_all) else None)
     vm = V.build(scored, plan, req.state, total, req.top, outside, total_all,
                  None, prefs, req.order)
-    reports = [R.build(s, i, prefs) for i, s in enumerate(vm["products"], 1)]
+    amounts = {k: v for k, v in (("예금", req.amount_deposit), ("적금", req.amount_monthly)) if v}
+    reports = [R.build(s, i, prefs, amounts or None) for i, s in enumerate(vm["products"], 1)]
     return vm, reports
 
 
@@ -338,13 +342,28 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
     if order not in ("hi", "lo"):
         raise HTTPException(status_code=400, detail=f"모르는 정렬: {order}")
     group = get("group", "bank") or "bank"
+    # 가입 금액 (E4) — `5천만원`·`50,000,000` 둘 다 받는다. 읽는 규칙은 CLI 와 같은 함수다
+    amounts: dict[str, int | None] = {}
+    for name in ("amount_deposit", "amount_monthly"):
+        raw = get(name).strip()
+        if not raw:
+            amounts[name] = None
+            continue
+        try:
+            amounts[name] = C.parse_amount(raw)
+        except SystemExit as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
     form = {"snapshot": resolve_snapshot(get("snapshot"), group), "group": group,
             "term": term, "company": company, "kinds": kinds, "prefs": prefs_arg,
             "order": order,
+            "amount_deposit": amounts["amount_deposit"] or "",
+            "amount_monthly": amounts["amount_monthly"] or "",
             "state_json": json.dumps(state, ensure_ascii=False)}
     req = ScreenRequest(snapshot=form["snapshot"], group=form["group"], term=term,
                         company=company or None, kinds=kinds or None,
-                        prefs=prefs_arg or None, top=10, state=state, order=order)
+                        prefs=prefs_arg or None, top=10, state=state, order=order,
+                        amount_deposit=amounts["amount_deposit"],
+                        amount_monthly=amounts["amount_monthly"])
     vm, reports = _screen_payload(req)
     if notice:
         # 문장은 뷰 모델이 든다 — 한쪽만 쓰는 낱말을 만들지 않는다 (`0039` 반증 조건 1)
@@ -354,7 +373,8 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다
-RESUME_KEYS = ("snapshot", "group", "term", "company", "kinds", "prefs", "order", "state")
+RESUME_KEYS = ("snapshot", "group", "term", "company", "kinds", "prefs", "order",
+               "amount_deposit", "amount_monthly", "state")
 
 
 def resume_code(form: dict, state: dict) -> str:

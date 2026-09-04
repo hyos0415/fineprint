@@ -52,12 +52,16 @@ def _sum(items: list[dict]) -> float:
     return round(sum(i["pp"] for i in items), 4)
 
 
-def build(s: dict, rank: int, prefs: dict | None = None) -> dict:
+def build(s: dict, rank: int, prefs: dict | None = None,
+          amounts: dict | None = None) -> dict:
     """상품 하나의 리포트 객체.
 
     **숫자는 전부 `evaluate()` 가 낸 값이다.** 여기서 하는 산수는 두 가지뿐이고
     둘 다 이미 있는 값의 차다 — 조건이 올린 폭(`raw_lo - base`, `raw_hi - raw_lo`)과
     단순 합과의 차이. 그 외에는 옮겨 적기만 한다.
+
+    `amounts` (E4 · `prereg-25`) 가 있으면 **예상 이자**(원)를 `이자` 칸에 담는다 — 그 산수는
+    `calculate.interest()` 한 곳이고 CLI 텍스트와 웹이 같은 칸을 읽는다. 없으면 None 이다.
     """
     why = s.get("why") or {"met": [], "unmet": [], "unknown": []}
     base = s["base"]
@@ -132,6 +136,8 @@ def build(s: dict, rank: int, prefs: dict | None = None) -> dict:
         # 밝히는 것까지는 우리 일이다
         "전제": [c for c in why["met"] if C.is_commitment(c["type"])],
         "전제_문장": C.PREMISE_NOTE,
+        # 예상 이자 — 가입 금액이 있을 때만 (E4 · A18). 세전·세후 둘 다 범위로 담고 3층 판정을 같이 낸다
+        "이자": C.interest(s, amounts, C.load_tax()),
         "사유": [{"코드": c, "라벨": C.caveat_label(c), "문장": t}
                for c, t in zip(s.get("caveats") or [], s.get("caveat_text") or [])],
         "정렬": order,
@@ -226,6 +232,17 @@ def render(rep: dict) -> str:
             out.append(f"      ⚠ 우리가 뽑은 우대가 공시 폭보다 {-v:.2f}%p 많다 — "
                        f"추출이 과다할 수 있다")
 
+    # 예상 이자 (E4 · `prereg-25`) — 원 단위 숫자에는 세전·세후 라벨과 가정 한 줄이 붙는다 (A18)
+    it = rep.get("이자")
+    if it:
+        out.append("")
+        out.append(f"    예상 이자   {it['금액_뜻']} {C.won(it['금액'])} · {it['개월']}개월 · {it['방식']}")
+        out.append(f"      세전   {_won_range(*it['세전'])}")
+        out.append(f"      세후   {_won_range(*it['세후'])}")
+        if it["종합과세_문장"]:
+            out.append(f"      ⚠ {it['종합과세_문장']}")
+        out.append(f"      {it['가정']}")
+
     # 전제 — 사용자가 "하겠다" 고 답한 조건. **"이미 받는다" 는 이 조건들에는 거짓이다**
     if rep["전제"]:
         out.append("")
@@ -256,9 +273,15 @@ def render(rep: dict) -> str:
     return "\n".join(out)
 
 
-def render_all(scored: list[dict], top: int, prefs: dict | None = None) -> str:
+def _won_range(lo: float, hi: float) -> str:
+    """원 범위 — 같으면 하나 (A1 과 같은 태도)."""
+    return C.won(lo) if lo == hi else f"{C.won(lo)} ~ {C.won(hi)}"
+
+
+def render_all(scored: list[dict], top: int, prefs: dict | None = None,
+               amounts: dict | None = None) -> str:
     """상위 `top` 개의 리포트. 맨 위에 세후 라벨·고지를 붙인다 (A12·A13 · `0035`)."""
     import ask_loop as L                  # 화면 문구는 한 곳에서만 온다
     main = L.ranked(scored, prefs)[:top]
-    blocks = [render(build(s, i, prefs)) for i, s in enumerate(main, 1)]
+    blocks = [render(build(s, i, prefs, amounts)) for i, s in enumerate(main, 1)]
     return "\n".join(L.screen_header(scored) + [""] + [("\n" + "-" * 96 + "\n").join(blocks)])
