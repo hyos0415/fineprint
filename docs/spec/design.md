@@ -485,7 +485,7 @@ NH1934월복리적금                        NH1934월복리적금
 **2026-09-01에 계약이 두 겹이 됐다** (`0039` · F4-0). 웹 렌더러가 붙으면 문자열 grep 이 무의미해지므로, **뷰 모델**(`src/analysis/view.py`)에 사실이 담겼는지를 먼저 보고(`[모델]`), 렌더러가 그것을 실제로 출력했는지를 렌더러마다 따로 본다. **두 겹이 잡는 것이 다르다** — 렌더러만 망가뜨리면 모델 0건·렌더 61건, 뷰 모델만 망가뜨리면 모델 4건·렌더 0건이었다. 그 음성 검사에서 **A1 이 렌더된 줄이 아니라 헬퍼 출력을 보고 있던 것**을 찾아 고쳤다.
 
 - **2026-08-28에 그 검사를 만들었다** — `src/analysis/check_screen_contract.py`.
-  질문 0개부터 끝까지 **모든 중간 상태**에서 A1~A14를 본다(사용자가 12번째 질문에서
+  질문 0개부터 끝까지 **모든 중간 상태**에서 A1~A17을 본다(사용자가 12번째 질문에서
   그만두면 보는 화면이 `ask_loop.render_final_screen()` 이고, 검사가 같은 함수를 읽는다).
   **위반 두 건을 찾았다** — 폭이 남은 상품의 `확정` 라벨(16종)과 `미응답`·`수치필요`
   문장 누락. 사전등록·결과는 `prereg-09`
@@ -778,7 +778,8 @@ E8이 "월 5건"이면 AI 없이 가고, "월 60건"이면 필요하다.
   계산기      src/analysis/calculate.py      상태 매칭 · 층 라벨 · 정렬 · 되묻기 목록
   질문 예산    src/analysis/ask_budget.py     질문을 하나씩 늘려가며 재는 곡선
   질문 루프    src/analysis/ask_loop.py       되묻기 2단계 — 하나씩 묻고 답을 받는다
-  화면 계약    src/analysis/check_screen_contract.py  중간 상태 전수 assert (A1~A14)
+  화면 계약    src/analysis/check_screen_contract.py  중간 상태 전수 assert (A1~A17)
+  기관 사전    src/analysis/companies.py      홈페이지·대표전화를 기관 코드로 붙인다 (F3 · A17)
   스코프 조사   src/analysis/scope_survey.py    스코프별 질문 수 · 좁히는 대가
   선호 가중치   src/analysis/prefs.py          설문 5문항 -> 고정 표 -> 조정 %p (`0030`)
   선호 조사    src/analysis/prefs_survey.py   순위 교체 수 · 지표 무변동 가드

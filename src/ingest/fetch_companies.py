@@ -18,6 +18,7 @@
     python src/ingest/fetch_companies.py --group bank
     python src/ingest/fetch_companies.py --group savingsbank
     python src/ingest/fetch_companies.py --check            (두 권역 최신 파일을 상품 스냅샷과 대조)
+    python src/ingest/fetch_companies.py --open             (화면에 나갈 URL 을 실제로 열어 본다 · prereg-21 P1)
 """
 from __future__ import annotations
 
@@ -106,8 +107,11 @@ def check(group: str) -> dict:
                        if products[co] != matched[co].get("kor_co_nm", ""))
     # P5 는 두 갈래로 센다 — 첫 수집(2026-09-04)에서 둘이 다 나왔고 F3 에서 다르게 다뤄야 한다.
     # 스킴이 없으면 그대로는 링크가 안 되고, 파라미터는 API 가 준 값이라 우리가 떼지 않는다
+    # 화면과 **같은 규칙**(`companies.link`)으로 센다 — 검사와 화면이 다른 규칙을 쓰면 수가 갈린다
+    sys.path.insert(0, str(REPO_ROOT / "src" / "analysis"))
+    import companies as CO
     no_scheme = sorted(r["kor_co_nm"] for r in with_url
-                       if not r["homp_url"].strip().lower().startswith(("http://", "https://")))
+                       if CO.link(r["homp_url"]) != r["homp_url"].strip())
     has_query = sorted(r["kor_co_nm"] for r in with_url if "?" in r["homp_url"])
     bad_url = sorted(set(no_scheme) | set(has_query))
     n = len(products)
@@ -131,6 +135,56 @@ def check(group: str) -> dict:
     return res
 
 
+def open_links(group: str) -> dict:
+    """`prereg-21` P1 — **화면에 나갈 URL** 을 실제로 연다. 집계만 낸다.
+
+    URL 은 `companies.link()` 가 화면에 내는 것과 같은 규칙으로 만든다(스킴 없을 때만 `https://`).
+    여기서 다른 규칙을 쓰면 검사가 화면과 다른 것을 여는 셈이다. 리다이렉트(3xx)는 따라가지 않고
+    그대로 "열린다" 로 센다 — 기관이 자기 주소 안에서 옮긴 것이다.
+    """
+    import urllib.error
+    import urllib.request
+    sys.path.insert(0, str(REPO_ROOT / "src" / "analysis"))
+    import companies as CO
+
+    directory = load_directory(group)
+    products = product_companies(group)
+    rows = [(products[co], CO.link(directory[co].get("homp_url", "")))
+            for co in sorted(products) if co in directory]
+    opened, failed = 0, []
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):        # 3xx 를 결과로 받는다
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect)
+    for name, url in rows:
+        if not url:
+            failed.append((name, url, "URL 없음"))
+            continue
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (fineprint prereg-21)"})
+        try:
+            with opener.open(req, timeout=15) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        except Exception as e:                       # noqa: BLE001 — 연결 실패도 결과다
+            # 사유를 그대로 적는다 — 첫 실행에서 `URLError` 하나가 실제로는 **이 파이썬의 인증서
+            # 저장소** 문제였다(페퍼저축은행 · curl 은 200). 도구의 실패와 기관의 실패를 갈라 적어야 한다
+            reason = getattr(e, "reason", None)
+            failed.append((name, url, f"{type(e).__name__}: {str(reason or e)[:70]}"))
+            continue
+        if 200 <= code < 400:
+            opened += 1
+        else:
+            failed.append((name, url, str(code)))
+        time.sleep(0.2)
+    print(f"\n■ {group} — 화면 URL {len(rows)}개 중 열린 것 {opened}개 · 안 열린 것 {len(failed)}개")
+    for name, url, why in failed:
+        print(f"    안 열림  {name:<14} {url}  ({why})")
+    return {"권역": group, "URL": len(rows), "열림": opened, "안 열림": failed}
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -139,10 +193,14 @@ def main() -> None:
         for g in GROUPS:
             check(g)
         return
+    if argv == ["--open"]:
+        for g in GROUPS:
+            open_links(g)
+        return
     if len(argv) == 2 and argv[0] == "--group" and argv[1] in GROUPS:
         fetch(argv[1])
         return
-    raise SystemExit("사용법: python src/ingest/fetch_companies.py --group bank|savingsbank · --check")
+    raise SystemExit("사용법: python src/ingest/fetch_companies.py --group bank|savingsbank · --check · --open")
 
 
 if __name__ == "__main__":

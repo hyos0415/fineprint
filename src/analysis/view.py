@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import calculate as C
+import companies as CO
 
 EPS = 1e-6
 
@@ -118,6 +119,11 @@ def display(s: dict) -> dict:
         "층": C.tier_label(s["tier"]),
         # 같은 상품의 다른 행 — 적립방식·단리복리와 그 행의 범위 (`prereg-18` §2.3 · A16)
         "다른_행": [f"{variant_label(o)} {L.span(o)}" for o in (s.get("_다른_행") or [])],
+        # 기관 홈페이지·대표전화 (F3 · `prereg-21` · A17). **기관 코드로 짝짓는다.** 링크는
+        # 정보이고 가입은 기관에서 한다(`0037`) — 사유 문장이 "은행에 확인해 보세요" 로 끝나는데
+        # 갈 곳이 없던 자리다. 스킴 보정은 `companies.link()` 한 곳이고, 웹의 `href` 와 CLI 의
+        # 한 줄이 같은 이 칸을 읽는다. 짝이 없으면 빈 칸이다 — 다른 곳에서 채우지 않는다
+        **CO.contact(s),
     }
 
 
@@ -352,6 +358,24 @@ def check_model(vm: dict) -> list[dict]:
             hit("A16", s["name"], f"같은 상품이 두 줄이다 — {seen_pk[pk]['rate_type']}/"
                                    f"{seen_pk[pk]['rsrv_type']} 와 {s['rate_type']}/{s['rsrv_type']}")
         seen_pk.setdefault(pk, s)
+
+    # A17 — 기관 홈페이지·대표전화의 **재료**가 있고 URL 이 API 값에서 스킴만 보정된 것인가
+    # (F3 · `prereg-21`). 사전에 없는 기관은 여기서 드러난다 — 화면은 빈 칸으로 내지만
+    # (`prereg-20` §4) 빈 칸이 생긴 사실은 검사가 말해야 한다. 렌더러가 그렸는지는 렌더 겹이 본다
+    for s in vm["products"]:
+        d = display(s)
+        if not d["홈페이지"] or not d["전화"]:
+            hit("A17", s["name"], f"기관 {s.get('co_no') or '-'} 의 홈페이지·전화가 사전에 없다")
+        elif not CO.is_faithful(d["홈페이지"], d["홈페이지_원천"]):
+            hit("A17", s["name"], f"화면 URL {d['홈페이지']} 이 API 값 {d['홈페이지_원천']} 에서 "
+                                  f"스킴 보정 이상으로 바뀌었다")
+        # 링크가 가는 기관(코드)과 화면에 적힌 기관(이름)이 **같은 곳**이어야 한다. 다르면 링크가
+        # 이름과 다른 은행으로 간다 — `prereg-21` 측정에서 실제로 잡혔다(저축은행 · 추출이 상품코드만으로
+        # 기관을 넘어 짝지은 행). 원인은 추출 쪽이고 여기서 고치지 않는다 — 검사는 사실만 말한다
+        기관_이름 = CO.name_of(s.get("co_no") or "")
+        if 기관_이름 and 기관_이름 != (s.get("company") or ""):
+            hit("A17", s["name"], f"행의 기관 코드 {s.get('co_no')} 는 {기관_이름} 인데 "
+                                  f"화면 이름은 {s.get('company')} 다 — 링크가 이름과 다른 곳으로 간다")
 
     # A8 — 성과 줄의 재료가 목록 1위와 같은 객체인가
     head, prods = vm["headline"]["상품"], vm["products"]
