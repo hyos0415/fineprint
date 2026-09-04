@@ -523,7 +523,11 @@ def apply_answer(state: dict, key: str, slot: dict, raw: str, kind: str) -> str:
 def run(stamp: str, group: str, term: int, top: int,
         scripted: list[str] | None, auto: str | None,
         company: str | None = None, kinds: str | None = None,
-        prefs: dict | None = None) -> dict:
+        prefs: dict | None = None, prefs_arg: str | None = None,
+        resume: dict | None = None) -> dict:
+    """`resume` 는 이어받을 세션 로그다 (D9 · 이슈 #67 · `prereg-24`). 그 `state` 로 시작해
+    **다음 질문부터** 묻는다. 서버가 무상태인 것과 같은 모양이다 — 답은 사용자(로그)가 들고
+    온다(`0040`). 이어받은 로그의 답을 다시 묻지 않는다."""
     tax = C.load_tax()
     rows_all, by_pair = AB.load(stamp, group, term)
     if not rows_all:
@@ -537,11 +541,18 @@ def run(stamp: str, group: str, term: int, top: int,
     plan = C.question_plan(rows, by_pair)
     total = C.questions_left(plan, {})
     total_all = C.questions_left(C.question_plan(rows_all, by_pair), {})
-    state: dict = {}
+    state: dict = dict((resume or {}).get("state") or {})
     steps: list[dict] = []
     scoped = len(rows) < len(rows_all)
 
     print(f"\n=== 되묻기 질문 루프 · {group} {term}개월 · 스냅샷 {stamp} ===")
+    if resume:
+        # 이어받은 답이 후보에 없는 은행을 가리키면 조용히 "거래 없음" 으로 유도된다 — 서버와 같은 검사
+        bad_banks = C.unknown_banks(state, rows)
+        if bad_banks:
+            raise SystemExit(f"이어받은 답에 후보에 없는 은행이 있다: {bad_banks} — 스코프가 다른 로그다")
+        print(f"이어하기     {resume.get('_path', '세션 로그')} 에서 답 {len(state)}개를 이어받았다 · "
+              f"다음 질문부터 묻는다")
     if scoped:
         print(f"찾는 범위   은행 {company or '전체'} · 예금/적금 {kinds or '전체'} "
               f"— 카탈로그 {len(rows_all)}개 중 {len(rows)}개 (질문 {total_all}→{total}개)")
@@ -557,14 +568,16 @@ def run(stamp: str, group: str, term: int, top: int,
     for line in P.lines(prefs or {},
                         sum(1 for s in ranked(scored, prefs) if s.get("_blocked"))):
         print(line)
-    start = dict(st)                     # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`)
+    # 첫 화면을 기준으로 폭 변화를 보여준다 (`0029`). **이어받은 세션은 원 세션의 첫 화면이 기준이다** —
+    # 폭 변화는 사용자의 여정에 대한 말이고, 여정은 로그가 시작한 곳에서 시작했다 (`prereg-24` P1 이 잡았다)
+    start = dict((resume or {}).get("start") or st)
     out0 = V.outside_best(rows_all, rows, by_pair, state, tax) if scoped else None
     if out0:                                       # A7 — 첫 화면에서도 대가를 보여준다
         print(f"\n  ⚠ 지금 고른 범위 밖에 {out0['net_hi']:.2f}% 가 있습니다 "
               f"({out0['company']} {out0['name'][:22]} · +{out0['gap']:.2f}%p · "
               f"[{out0['channel']}] · 조건 다 채웠을 때) · "
               f"넓히면 질문이 {total_all}개로 늘어납니다")
-    start_top1 = st["top1"]
+    start_top1 = (resume or {}).get("top1_start", st["top1"])
     print("\n" + "-" * 92)
     print("■ 2단계 — 질문 루프. 많은 상품을 여는 질문부터 묻습니다 (순서는 고정입니다)")
 
@@ -644,13 +657,17 @@ def run(stamp: str, group: str, term: int, top: int,
     print(f"    1위 금리     {start_top1:.2f}% → {st['top1']:.2f}% "
           f"(되묻기가 깎은 폭 {start_top1 - st['top1']:.2f}%p)")
     return {"snapshot": stamp, "group": group, "term": term,
+            # 스코프와 선호 원문 — 이어하기(`--resume`)가 같은 후보 집합에서 이어지려면 필요하다 (D9)
+            "company": company, "kinds": kinds, "prefs_arg": prefs_arg,
+            "resumed_from": (resume or {}).get("_path"),
             "started": datetime.now().isoformat(timespec="seconds"),
             "questions_total": total, "mode": auto or ("scripted" if scripted is not None
                                                        else "interactive"),
             "quit_at": quit_at, "quit_why": quit_why, "answered": len(steps), "unsure": n_unsure,
             "state": {k: v for k, v in state.items()}, "steps": steps,
             "prefs": {k: v for k, v in (prefs or {}).items()},
-            "final": st, "top1_start": start_top1}
+            # `start` 는 첫 화면의 사실 — 이어받는 세션이 폭 변화의 기준으로 쓴다 (D9)
+            "final": st, "top1_start": start_top1, "start": start}
 
 
 def main() -> None:
@@ -661,9 +678,9 @@ def main() -> None:
         print(P.survey())
         return
     group, term, top, auto, answers = "bank", 12, 10, None, None
-    company, kinds, prefs_arg = None, None, None
+    company, kinds, prefs_arg, resume_path = None, None, None, None
     for flag in ("--group", "--term", "--top", "--auto", "--answers",
-                 "--company", "--kind", "--prefs"):
+                 "--company", "--kind", "--prefs", "--resume"):
         if flag in argv:
             i = argv.index(flag)
             if i + 1 >= len(argv):
@@ -677,19 +694,39 @@ def main() -> None:
             company = v if flag == "--company" else company
             kinds = v if flag == "--kind" else kinds
             prefs_arg = v if flag == "--prefs" else prefs_arg
+            resume_path = v if flag == "--resume" else resume_path
             argv = argv[:i] + argv[i + 2:]
+    # 이어하기 (D9) — 로그가 스냅샷·권역·기간·스코프·선호를 다 들고 있어 날짜 인자가 필요 없다.
+    # 명령줄에 준 값이 있으면 그것이 이긴다 (같은 답으로 다른 정렬·top 을 보는 데 쓴다)
+    resume: dict | None = None
+    if resume_path:
+        resume = json.loads(Path(resume_path).read_text(encoding="utf-8"))
+        resume["_path"] = resume_path
+        if not argv:
+            argv = [resume["snapshot"]]
+        if "--group" not in sys.argv:
+            group = resume.get("group", group)
+        if "--term" not in sys.argv:
+            term = int(resume.get("term", term))
+        if "company" not in resume:
+            print("[경고] 옛 로그다 — 스코프(company·kinds)가 없어 전체 후보에서 이어진다. "
+                  "같은 스코프를 --company · --kind 로 다시 주는 것이 맞다")
+        company = company if "--company" in sys.argv else resume.get("company")
+        kinds = kinds if "--kind" in sys.argv else resume.get("kinds")
+        prefs_arg = prefs_arg if "--prefs" in sys.argv else resume.get("prefs_arg")
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/ask_loop.py YYYYMMDD "
                          "[--group bank|savingsbank] [--term 12] [--top 10] "
                          "[--company 우리,농협] [--kind 적금] "
                          "[--auto 예|아니오|모름] [--answers 예,아니오,모름]\n"
-                         f"        [--prefs ...]  [--survey]\n        {P.USAGE}")
+                         f"        [--prefs ...]  [--survey]  [--resume data/pilot/ask_session_*.json]\n"
+                         f"        {P.USAGE}")
     if auto and auto not in ("예", "아니오", "모름"):
         raise SystemExit("--auto 는 예 · 아니오 · 모름 중 하나다")
     scripted = [a.strip() for a in answers.split(",")] if answers else None
     stamp = argv[0]
     log = run(stamp, group, term, top, scripted, auto, company, kinds,
-              P.parse(prefs_arg))
+              P.parse(prefs_arg), prefs_arg, resume)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = C.OUT_DIR / f"ask_session_{group}_{stamp}_{term}m_{ts}.json"
     out.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")

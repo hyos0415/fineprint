@@ -232,5 +232,16 @@
 {% endfor %}
 {% endif %}
 
+{# 이어하기 (D9 · `prereg-24`) — 답은 서버에 남지 않는다 (`0040`). 나중에 이어서 답하려면 사용자가
+   이 코드를 들고 있어야 한다. JS 없이 복사가 되는 텍스트 상자다. 코드는 서버가 만들었다 #}
+{% if resume_code %}
+<details class="card">
+  <summary><b>나중에 이어서 답하기</b> — 이어하기 코드</summary>
+  <p class="notice">답은 서버에 남지 않습니다. 이어서 답하려면 아래 코드를 복사해 보관해 두고,
+    처음 화면의 '이어하기 코드' 칸에 붙여 넣으세요. 이 화면이 그대로 다시 나옵니다.</p>
+  <textarea readonly rows="4" style="width:100%; font:12px/1.4 monospace">{{ resume_code }}</textarea>
+</details>
+{% endif %}
+
 <p style="margin-top:28px"><a href="/">처음으로</a></p>
 {% endblock %}
