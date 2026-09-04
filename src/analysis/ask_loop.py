@@ -330,7 +330,7 @@ def status_bar(plan: dict, state: dict, scored: list[dict], total: int,
 # 것과 되물어도 안 없어지는 것을 한 제목 아래 놓으면 사용자가 무엇을 할 수 있는지
 # 알 수 없다.
 ASKABLE_CAVEATS = ("미응답",)      # `수치필요` 는 `prereg-10` 에서 사라졌다
-HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요")
+HARD_CAVEATS = ("조건불명", "중복우대불명", "추첨", "단계불명", "모름", "이행필요", "뜻없음")
 
 
 def render_final_screen(scored: list[dict], plan: dict, state: dict, total: int,
