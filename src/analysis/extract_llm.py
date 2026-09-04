@@ -222,9 +222,13 @@ def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
     for kind, label in (("deposit", "예금"), ("saving", "적금")):
         path = RAW_DIR / f"{kind}{suffix}_{stamp}.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
-        base = {b["fin_prdt_cd"]: b for b in payload["baseList"]}
+        # **기관코드 + 상품코드**로 붙인다 (이슈 #61 · `prereg-22`). 상품코드만 쓰면 코드가 겹치는
+        # 기관(저축은행 예금 52 · 적금 29 코드)에서 마지막 기관의 이름·조건·채널이 이겨서, 금리는
+        # 기관 A · 조건은 기관 B 인 행이 생긴다 — 저축은행 행 1,090 중 절반이 그랬고 F3 의 링크(A17)가
+        # 드러냈다. `0031` 이 상품을 (기관코드, 상품코드)로 세게 고칠 때 붙이는 자리는 안 고쳤던 것이다
+        base = {(b["fin_co_no"], b["fin_prdt_cd"]): b for b in payload["baseList"]}
         for opt in payload["optionList"]:
-            product = base.get(opt["fin_prdt_cd"])
+            product = base.get((opt["fin_co_no"], opt["fin_prdt_cd"]))
             r1, r2 = opt.get("intr_rate"), opt.get("intr_rate2")
             if not product or r1 is None or r2 is None:
                 continue
@@ -293,13 +297,17 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
-    group, limit, label = "bank", None, ""
-    if "--label" in argv:
-        i = argv.index("--label")
-        if i + 1 >= len(argv):
-            raise SystemExit("--label 값이 없다")
-        label = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
+    group, limit, label, reuse_path = "bank", None, "", None
+    for flag in ("--label", "--reuse"):
+        if flag in argv:
+            i = argv.index(flag)
+            if i + 1 >= len(argv):
+                raise SystemExit(f"{flag} 값이 없다")
+            if flag == "--label":
+                label = argv[i + 1]
+            else:
+                reuse_path = Path(argv[i + 1])
+            argv = argv[:i] + argv[i + 2:]
     for flag, cast in (("--group", str), ("--limit", int)):
         if flag in argv:
             i = argv.index(flag)
@@ -310,17 +318,35 @@ def main() -> None:
             argv = argv[:i] + argv[i + 2:]
     if len(argv) != 1:
         raise SystemExit("사용법: python src/analysis/extract_llm.py YYYYMMDD "
-                         "[--group bank|savingsbank] [--limit N] [--label v2]")
+                         "[--group bank|savingsbank] [--limit N] [--label v2] "
+                         "[--reuse data/pilot/extract_llm_..._before-61.json]")
     stamp = argv[0]
 
     rows, pairs = load_pairs(stamp, group)
-    todo = pairs[:limit] if limit else pairs
+    # **옛 결과 재사용** (이슈 #61 · `prereg-22` §3). 같은 (문구, 기간)은 같은 호출이다(temperature 0 ·
+    # "같은 쌍은 재사용한다" 는 원래 설계). `pair_id` 는 자리 번호라 소비자가 그 번호로 읽으므로
+    # 번호를 새로 매긴 **완전한 파일**을 만들고, 옛 파일에 없는 쌍만 부른다. 재사용한 쌍은 `reused` 로
+    # 표시하고 토큰·비용 합계에 넣지 않는다
+    reused: dict[tuple[str, int], dict] = {}
+    if reuse_path is not None:
+        old = json.loads(reuse_path.read_text(encoding="utf-8"))
+        if old.get("group") != group or old.get("snapshot") != stamp:
+            raise SystemExit(f"--reuse 파일이 다른 권역·스냅샷이다: {old.get('group')} {old.get('snapshot')}")
+        reused = {(p["text"], p["term"]): p for p in old["pairs"]}
+    todo = [p for p in pairs if (p["text"], p["term"]) not in reused]
+    todo = todo[:limit] if limit else todo
     key = api_key()
     print(f"[B] {MODEL_ID} · temperature {TEMPERATURE} · 재시도 없음")
-    print(f"    스냅샷 {stamp} ({group}) · 조건 있는 행 {len(rows)} · 호출할 쌍 {len(todo)}"
-          f"{f' (전체 {len(pairs)} 중 --limit)' if limit else ''}")
+    print(f"    스냅샷 {stamp} ({group}) · 조건 있는 행 {len(rows)} · 쌍 {len(pairs)} · 호출할 쌍 {len(todo)}"
+          f"{f' (--limit)' if limit else ''}"
+          f"{f' · 재사용 {len(pairs) - len(todo)} ({reuse_path.name})' if reuse_path else ''}")
 
     results, t0, tok_in, tok_out = [], time.time(), 0, 0
+    for pair in pairs:
+        old_p = reused.get((pair["text"], pair["term"]))
+        if old_p is not None:
+            copied = {k: v for k, v in old_p.items() if k not in ("pair_id", "text", "term")}
+            results.append({**pair, **copied, "reused": True})
     for n, pair in enumerate(todo, 1):
         started = time.time()
         try:
@@ -349,6 +375,8 @@ def main() -> None:
         ok = sum(1 for r in results if r["schema_ok"])
         print(f"  {n:3d}/{len(todo)} 기간{pair['term']:>3}개월 "
               f"{results[-1]['elapsed_s']:5.1f}s  스키마 통과 {ok}/{len(results)}", flush=True)
+    # 파일 안의 순서는 `pair_id` 순이다 — 재사용한 것과 새로 부른 것이 섞여 들어왔다
+    results.sort(key=lambda r: r["pair_id"])
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     suffix = "" if group == "bank" else f"_{group}"
@@ -358,6 +386,7 @@ def main() -> None:
         "label": "llm-restricted-schema", "model_id": MODEL_ID, "snapshot": stamp,
         "group": group, "temperature": TEMPERATURE, "max_tokens": MAX_TOKENS,
         "n_rows": len(rows), "n_pairs": len(pairs), "n_called": len(todo),
+        "n_reused": len(pairs) - len(todo), "reused_from": reuse_path.name if reuse_path else None,
         "usage_total": {"input_tokens": tok_in, "output_tokens": tok_out},
         "elapsed_s": round(time.time() - t0, 1),
         "rows": rows, "pairs": results,
