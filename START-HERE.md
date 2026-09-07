@@ -365,7 +365,7 @@ M3 재측정 — 스코프 걸린 세션(질문 7개)을 사람이 완주했고 
 > 5  그 뒤 — 모바일 UI(표 → 카드) → 사설망 배포(Tailscale)
 > ```
 >
-> **오늘 남긴 자산** — 로컬 서빙(llama.cpp b10830 · CUDA 13.3) · 모델 셋(`data/models/` 12.8GB · git 제외) · `r2_parse.py`(v1~v5 · hybrid ·
+> **오늘 남긴 자산** — 로컬 서빙(llama.cpp b10830 · CUDA 13.3) · 모델 둘(`data/models/` Qwen3.5-4B Q5 · 9B Q4 · 8.4GB · git 제외 — EXAONE-3.5-7.8B 는 Claude 가 혼자 고른 대조군이라 사람 결정으로 지웠다 · 다음 대조군 후보는 사람 제안 **kanana**) · `r2_parse.py`(v1~v5 · hybrid ·
 > 스키마 강제 · 후보 집합 필터 · 은행 역할) · `measure_r2.py`(DEV/TEST/TEST2 · 두 겹 오답) · 표본 100문장(`r2_sample*.py` · 합성 · 라벨).
 >
 > **그 다음** — 모바일 UI(표 → 카드 · CSS 만) → 사설망 배포(Tailscale · 노트북 서버 · 결정 문서) → 9월 공시(9/20 전후 · B6 · H2 검증 ·
