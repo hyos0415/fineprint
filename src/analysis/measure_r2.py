@@ -24,7 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
 import r2_parse as R2  # noqa: E402
-from r2_sample import S  # noqa: E402
+from r2_sample2 import SETS  # noqa: E402
+from r2_sample3 import TEST2  # noqa: E402
+
+SETS = {**SETS, "test2": TEST2}      # test2 — `prereg-28` §7 (은행 역할 스키마) 를 한 번 재는 새 평가 표본
+S: list[dict] = []          # `--set` 으로 고른다 (기본 dev). 2차(`prereg-28`)부터 dev/test 를 가른다
 
 STAMPS = {"bank": "20260826", "savingsbank": "20260825"}
 
@@ -80,32 +84,64 @@ def score(sample: dict, cand: dict, keys: set[str] | None = None) -> dict:
     traded_ok = (sorted(cand["traded"]) if cand["traded"] is not None else None) == \
                 (sorted(sample["traded"]) if sample["traded"] is not None else None)
     return {"wrong": wrong, "wrong_raw": wrong_raw, "missed": missed, "n_askable": len(askable),
-            "fields": fields, "traded_ok": traded_ok, "dropped": cand["dropped"]}
+            "fields": fields, "traded_ok": traded_ok, "traded_got": cand["traded"], "dropped": cand["dropped"]}
 
 
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     argv = sys.argv[1:]
-    url, model, label = R2.DEFAULT_URL, "model", "v1"
-    for flag in ("--url", "--model", "--label"):
+    url, model, label, which, evidence, verify = R2.DEFAULT_URL, "model", "v1", "dev", True, False
+    verify_dropped: list[tuple] = []
+    for flag in ("--url", "--model", "--label", "--set", "--no-evidence-filter", "--verify"):
         if flag in argv:
             i = argv.index(flag)
+            if flag == "--no-evidence-filter":
+                evidence = False; argv = argv[:i] + argv[i + 1:]; continue
+            if flag == "--verify":
+                verify = True; argv = argv[:i] + argv[i + 1:]; continue
             v = argv[i + 1]
             url = v if flag == "--url" else url
             model = v if flag == "--model" else model
             label = v if flag == "--label" else label
+            which = v if flag == "--set" else which
             argv = argv[:i] + argv[i + 2:]
-    print(f"=== R2 측정 · 모델 {model} · 프롬프트 {label} · 표본 {len(S)}문장 ===\n")
+    global S
+    S = SETS[which]
+    print(f"=== R2 측정 · 모델 {model} · 프롬프트 {label} · 표본 {which} {len(S)}문장 · 근거 필터 {'켬' if evidence else '끔'}"
+          f" · 거래 은행 재확인 {'켬' if verify else '끔'} ===\n")
     results, secs, n_label = [], [], 0
     for s in S:
         group = s["scope"]["group"] or "bank"
         keys, _ = plan_keys(group, s["scope"]["banks"], s["scope"]["kinds"])
-        parsed, sec, err = R2.call(s["text"], url, system=R2.PROMPTS[label])
-        secs.append(sec)
+        if label == "hybrid":
+            # 두 호출 — 조건 답·스코프는 v3(짧은 프롬프트 · 답이 정확), 은행 목록은 v5(은행마다 역할 · 거래/보고싶음이 안 섞임)
+            parsed, sec, err = R2.call(s["text"], url, system=R2.PROMPTS["v3"], schema=R2.SCHEMAS["v3"])
+            parsed5, sec5, err5 = R2.call(s["text"], url, system=R2.PROMPTS["v5"], schema=R2.SCHEMAS["v5"])
+            sec += sec5
+            if not err and not err5:
+                parsed = {**parsed, "banks": parsed5.get("banks", []),
+                          "says_no_bank_relations": parsed5.get("says_no_bank_relations", False)}
+                parsed.pop("traded", None); parsed["scope"] = {**parsed["scope"]}
+                parsed["scope"].pop("banks", None)
+            err = err or err5
+        else:
+            parsed, sec, err = R2.call(s["text"], url, system=R2.PROMPTS[label], schema=R2.SCHEMAS.get(label))
         if err:
+            secs.append(sec)
             results.append({"n": s["n"], "error": err}); print(f"  {s['n']:>2}  실패 {sec:5.1f}s  {err}"); continue
-        cand = R2.to_candidates(parsed, keys or None)
+        cand = R2.to_candidates(parsed, keys or None, s["text"] if evidence else None)
+        # 방안 ② — 거래 은행 후보를 한 은행씩 두 번째 호출로 대조한다 (`prereg-28` §7). 뺀 것을 정답/오답으로 센다
+        if verify and cand["traded"]:
+            kept = []
+            for b in cand["traded"]:
+                ok_b, vs = R2.verify_traded(s["text"], b, url); sec += vs
+                if ok_b is False:
+                    verify_dropped.append((s["n"], b, b in (s["traded"] or [])))   # (문장, 은행, 정답이었나)
+                else:
+                    kept.append(b)
+            cand["traded"] = kept
+        secs.append(sec)
         r = score(s, cand, keys or None); r["n"] = s["n"]; r["value"] = value_axis(s); results.append(r)
         n_label += r["n_askable"]
         flag = "  " if not r["wrong_raw"] else ("✗ " if r["wrong"] else "△ ")
@@ -115,21 +151,35 @@ def main() -> None:
     ok = [r for r in results if "error" not in r]
     wrong = sum(len(r["wrong"]) for r in ok); missed = sum(len(r["missed"]) for r in ok)
     wrong_raw = sum(len(r["wrong_raw"]) for r in ok)
+    # 필터가 무엇을 걸렀나 — 근거 없음으로 걸린 것 중 **오답이었던 것**과 **정답이었던 것**(억울하게 걸린 것)
+    ev_dropped = [(r["n"], d) for r in ok for d in r["dropped"] if d.get("why") == "근거없음"]
+    by_n = {s["n"]: s for s in S}
+    ev_bad = sum(1 for n, d in ev_dropped if by_n[n]["answers"].get(d["key"]) != d["value"] and (by_n[n].get("also_ok") or {}).get(d["key"]) != d["value"])
+    ev_good = len(ev_dropped) - ev_bad
     fields = {f: sum(r["fields"][f] for r in ok) for f in ("권역", "은행", "상품군", "기간", "금액")}
     traded = sum(r["traded_ok"] for r in ok)
-    reductions = [r["value"]["감소"] for r in ok if S[r["n"] - 1]["answers"] or S[r["n"] - 1]["traded"] is not None]
+    # 번호로 찾는다 — TEST 표본은 101 부터라 순번이 아니다 (첫 TEST 실행이 여기서 죽었다 · `prereg-28` §6)
+    reductions = [r["value"]["감소"] for r in ok if by_n[r["n"]]["answers"] or by_n[r["n"]]["traded"] is not None]
     print("\n" + "-" * 80)
-    print(f"  잘못 채운 답   화면 {wrong} (후보 집합 필터 뒤 · 관문은 0) · 원출력 {wrong_raw} (모델이 낸 것 전부)")
+    print(f"  잘못 채운 답   화면 {wrong} (필터 뒤 · 관문은 0) · 원출력 {wrong_raw} (모델이 낸 것 전부)")
+    print(f"  근거 필터      걸러낸 오답 {ev_bad} · 걸러낸 정답(억울) {ev_good}")
     print(f"  빠뜨린 답     {missed} / 물을 수 있는 라벨 {n_label} ({missed / n_label * 100:.0f}%)")
     print(f"  스코프 칸      " + " · ".join(f"{f} {v}/{len(ok)}" for f, v in fields.items())
           + f"  → {sum(fields.values()) / (5 * len(ok)) * 100:.0f}%")
-    print(f"  거래 은행     {traded}/{len(ok)}")
+    # (다) 틀린 은행 — 라벨에 없는 은행을 거래 목록에 넣은 수 (`prereg-28` §2)
+    wrong_banks = sum(1 for r in ok for b in (r.get("traded_got") or []) if b not in (by_n[r["n"]]["traded"] or []))
+    print(f"  거래 은행     일치 {traded}/{len(ok)} · **틀린 은행 넣음 {wrong_banks}** (관문 0)")
+    if verify:
+        vb = sum(1 for _, _, was_right in verify_dropped if not was_right); vg = len(verify_dropped) - vb
+        print(f"  재확인 호출    뺀 오답 {vb} · 뺀 정답(억울) {vg}")
     print(f"  지연         중앙값 {statistics.median(secs):.1f}s · 최대 {max(secs):.1f}s")
     print(f"  가치(라벨 기준) 답이 있는 문장 {len(reductions)}개 · 질문 감소 중앙값 {statistics.median(reductions) if reductions else 0} · "
           f"합 {sum(reductions)}")
     print(f"  JSON 실패     {len(S) - len(ok)}")
-    out = C.OUT_DIR / f"r2_measure_{model}_{label}_{time.strftime('%Y%m%d-%H%M%S')}.json"
-    out.write_text(json.dumps({"model": model, "prompt": label, "n": len(S), "wrong": wrong, "wrong_raw": wrong_raw, "missed": missed,
+    out = C.OUT_DIR / f"r2_measure_{model}_{label}_{which}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out.write_text(json.dumps({"model": model, "prompt": label, "set": which, "evidence_filter": evidence,
+                               "ev_dropped_bad": ev_bad, "ev_dropped_good": ev_good,
+                               "n": len(S), "wrong": wrong, "wrong_raw": wrong_raw, "missed": missed,
                                "n_label": n_label, "fields": fields, "traded_ok": traded,
                                "latency_median": statistics.median(secs), "latency_max": max(secs),
                                "value_reductions": reductions, "json_fail": len(S) - len(ok),
