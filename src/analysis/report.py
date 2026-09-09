@@ -114,6 +114,8 @@ def build(s: dict, rank: int, prefs: dict | None = None,
         "조정 사유": s.get("_why") or [],
         "선호밖": bool(s.get("_blocked")),
     }
+    tax_cfg = C.load_tax()
+    it = C.interest(s, amounts, tax_cfg)          # 예상 이자 (E4) — 세금 설명(E4-3)도 같은 dict 를 읽는다
     return {
         "순위": rank,
         "%p 설명": C.PP_NOTE,          # 남기고 설명만 붙이는 낱말 (F5 · 이슈 #45)
@@ -137,7 +139,9 @@ def build(s: dict, rank: int, prefs: dict | None = None,
         "전제": [c for c in why["met"] if C.is_commitment(c["type"])],
         "전제_문장": C.PREMISE_NOTE,
         # 예상 이자 — 가입 금액이 있을 때만 (E4 · A18). 세전·세후 둘 다 범위로 담고 3층 판정을 같이 낸다
-        "이자": C.interest(s, amounts, C.load_tax()),
+        "이자": it,
+        # 세금은 이렇게 계산했습니다 (E4-3 · `prereg-31`) — 세율·조문은 설정 파일에서, 세금 원은 세전−세후
+        "세금설명": C.tax_explained(s, it, tax_cfg),
         "사유": [{"코드": c, "라벨": C.caveat_label(c), "문장": t}
                for c, t in zip(s.get("caveats") or [], s.get("caveat_text") or [])],
         "정렬": order,
@@ -259,6 +263,20 @@ def render(rep: dict) -> str:
     out += _conditions("아직 안 답한 조건", rep["조건"]["안답한"],
                        "  — 답하면 범위가 좁아진다")
     out += _conditions("못 채운 조건 — 이 금리는 못 받는다", rep["조건"]["못채운"])
+
+    # 세금은 이렇게 계산했습니다 (E4-3 · `prereg-31`) — 재료는 calculate.tax_explained · 여기는 꽂기만
+    tx = rep["세금설명"]
+    out.append("")
+    out.append(f"    {tx['제목']}")
+    if tx["금액"]:
+        m = tx["금액"]
+        if m["비과세_적용"]:
+            out.append(f"      비과세종합저축 대상으로 답해 세금 0원 → 세후 {_won_range(*m['세후'])}")
+        else:
+            out.append(f"      세전 이자 {_won_range(*m['세전'])} × {m['세율'] * 100:g}% = 세금 {_won_range(*m['세금'])} → 세후 {_won_range(*m['세후'])}")
+    out.append(f"      {tx['일반과세']}")
+    out.append(f"      {tx['비과세']}")
+    out.append(f"      {tx['종합과세']}")
 
     if rep["사유"]:
         out.append("")
