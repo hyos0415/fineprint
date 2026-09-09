@@ -23,13 +23,16 @@
   <h2>내 상황을 한 문장으로 <span class="notice">(선택 — 아래 칸을 대신 채워 줍니다)</span></h2>
   <div>
     <textarea id="situation" name="situation" rows="2" style="width:100%; font:inherit"
-              placeholder="예: 우리은행 적금 1년, 매달 30만원"></textarea>
-    <span class="notice">문장은 이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간 · 금액</b>만 채웁니다.
-      조건 답은 채우지 않습니다. 문장은 서버에 남지 않습니다.</span>
+              placeholder="예: 우리은행 적금 1년짜리 보고 싶어"></textarea>
+    <span class="notice">문장은 이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간</b>만 채웁니다.
+      금액과 조건 답은 채우지 않습니다 — 금액은 아래에 직접 적어 주세요. 문장은 서버에 남지 않습니다.</span>
   </div>
   <p><button type="submit" formaction="/prefill">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
   {% if prefill_notice %}
-  <p class="card {% if prefill_failed %}warn{% endif %}"><b>{{ prefill_notice }}</b></p>
+  <p class="card {% if prefill_failed %}warn{% endif %}"><b>{{ prefill_notice }}</b>
+    {# 새로고침은 마지막 요청(칸 채우기)을 다시 보낸다 — 채운 표시가 그대로 남고 모델도 한 번 더 불린다.
+       빈 폼으로 가는 길은 이 링크다 (GET / · 아무것도 실어 보내지 않는다) #}
+    <br><a href="/">처음부터 — 칸을 모두 비운 새 화면으로</a></p>
   {% endif %}
 
   <h2>어디서 찾을까요</h2>
@@ -101,14 +104,29 @@
       <label for="amount_deposit">예금 — 한 번에 넣을 금액{% if "amount_deposit" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="amount_deposit" type="text" name="amount_deposit" value="{{ form.get('amount_deposit', '') }}"
              placeholder="예: 5천만원 또는 50000000">
+      {% if 금액읽기.get('amount_deposit') %}<span class="notice">= <b>{{ 금액읽기['amount_deposit'] }}</b></span>{% endif %}
     </div>
     <div class="grow">
       <label for="amount_monthly">적금 — 매달 넣을 금액{% if "amount_monthly" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="amount_monthly" type="text" name="amount_monthly" value="{{ form.get('amount_monthly', '') }}"
              placeholder="예: 100만원 또는 1000000">
+      {% if 금액읽기.get('amount_monthly') %}<span class="notice">= <b>{{ 금액읽기['amount_monthly'] }}</b></span>{% endif %}
     </div>
   </div>
   <p class="notice">금액은 <b>예상 이자를 보여주는 데만</b> 씁니다 — 금리와 순서는 바뀌지 않습니다.</p>
+  {# 이 화면의 **유일한 스크립트** — 금액 칸에 치는 동안 쉼표만 넣는다 (`0061` · 사람 결정 2026-09-09 · "숫자를 읽을 수 있게").
+     계산·판정·표시 결정을 하지 않는다. 서버는 쉼표가 있는 값을 그대로 받는다(`parse_amount`). 스크립트가 꺼져 있어도 폼은 그대로 동작한다.
+     한글 읽기("오천만 원")는 서버가 붙인다 — 같은 읽기 코드를 JS 로 한 벌 더 만들지 않는다(두 벌이면 다른 말을 한다). #}
+  <script>
+    for (const el of document.querySelectorAll('input[name="amount_deposit"], input[name="amount_monthly"]')) {
+      el.addEventListener('input', () => {
+        const digits = el.value.replace(/[^0-9]/g, '');
+        if (digits === '' || /[^0-9,]/.test(el.value)) return;   // "5천만원" 처럼 단위를 적는 중이면 건드리지 않는다
+        el.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      });
+      el.dispatchEvent(new Event('input'));   // 문장에서 채워 온 값(50000000)도 처음부터 쉼표로 보인다
+    }
+  </script>
 
   <h2>무엇을 중요하게 보시나요 <span class="notice">(선택 — 답한 것만 순서에 반영됩니다)</span></h2>
   <p class="notice">여기 답한 것은 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>

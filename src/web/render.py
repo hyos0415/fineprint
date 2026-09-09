@@ -32,6 +32,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src" / "analysis"))
 
+import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
 import view as V  # noqa: E402
 
@@ -73,6 +74,17 @@ def render_start(form: dict | None = None, error: str | None = None,
         t = 0
     if t and t not in terms:
         terms = sorted(terms + [t])
+    # 금액 읽기 — 칸에 값이 있으면 옆에 한글로 (`오백만 원`). 사람 세션에서 `5000000` 을 읽지 못했다(`prereg-29` §7).
+    # 판정이 아니라 같은 값을 다른 표기로 한 번 더 보이는 것이다. 못 읽는 값은 그냥 둔다 — 제출 때 서버가 오류로 답한다
+    readings: dict[str, str] = {}
+    for k in ("amount_deposit", "amount_monthly"):
+        raw = str(form.get(k, "") or "").strip()
+        if not raw:
+            continue
+        try:
+            readings[k] = C.amount_words(C.parse_amount(raw))
+        except SystemExit:
+            pass
     return _env.get_template("start.html").render(
         form=form,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
@@ -81,6 +93,7 @@ def render_start(form: dict | None = None, error: str | None = None,
         error=error,
         기간들=terms,
         채운칸=set(prefilled),
+        금액읽기=readings,
         prefill_notice=prefill_notice,
         prefill_failed=prefill_failed,
     )

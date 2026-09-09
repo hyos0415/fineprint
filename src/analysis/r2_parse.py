@@ -389,11 +389,13 @@ def to_candidates(parsed: dict, plan_keys: set[str] | None = None, text: str | N
 
 # ── 화면용 (2026-09-09 · `prereg-29` · `0060` D2·D3·D6) — 스코프 다섯 칸만 낸다. 조건 답·거래 은행은 여기서 나가지 않는다
 PREFILL_TIMEOUT = 30          # 폼 요청에 실리는 호출이다 — 120초를 기다리게 하지 않는다
-PREFILL_FIELDS = ("group", "company", "kinds", "term", "amount_deposit", "amount_monthly")
+# 금액 두 칸은 **미리 채우지 않는다** (2026-09-09 · `0060` 반증 조건 4 발동 · `prereg-29` §7). 사람 세션에서 한글 숫자 "오천만원" 을
+# 세 번 연속 500만원으로 읽었다. 아라비아 숫자("3천만원")는 맞았지만, 관측 뒤에 규칙을 좁히지 않는다 — 조항대로 뺀다. 모델 출력에는 남아 있고 읽지 않는다
+PREFILL_FIELDS = ("group", "company", "kinds", "term")
 
 
 def prefill(text: str, url: str = DEFAULT_URL) -> tuple[dict[str, str], float, str | None]:
-    """문장 하나 → 0단계 폼의 다섯 칸 값 (문자열 · 폼에 그대로 꽂는 모양). `(칸, 초, 오류)`.
+    """문장 하나 → 0단계 폼의 네 칸 값 (권역·은행·예금/적금·기간 · 문자열 · 폼에 그대로 꽂는 모양). `(칸, 초, 오류)`.
 
     v5(은행 역할 스키마) **한 번** 호출한다 (`prereg-29` §2). 읽는 것은 scope 네 칸과 "보고싶음" 역할의 은행만이다 —
     "거래함"·"거래없음" 과 answers 는 **읽지 않는다**(`0060` D1·D3). 모델이 null 로 둔 칸은 결과에 없다.
@@ -415,10 +417,7 @@ def prefill(text: str, url: str = DEFAULT_URL) -> tuple[dict[str, str], float, s
         out["kinds"] = sc["kinds"]
     if isinstance(sc.get("term"), int) and 1 <= sc["term"] <= 60:
         out["term"] = str(sc["term"])
-    for k in ("amount_deposit", "amount_monthly"):
-        v = sc.get(k)
-        if isinstance(v, int) and v > 0:
-            out[k] = str(v)
+    # amount_deposit · amount_monthly 는 내지 않는다 — 위 PREFILL_FIELDS 주석
     return out, secs, None
 
 

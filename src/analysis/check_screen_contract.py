@@ -48,7 +48,8 @@
         하고, 금액이 없으면 예상 이자 칸이 없어야 한다** (E4 · `prereg-25`) — 원 단위 숫자도 %와 같이
         무엇을 말하는 숫자인지 밝혀야 한다(A12 와 같은 태도). 검사는 예금 5천만원 · 적금 월 100만원을 넣고 본다
     A19 **문장으로 미리 채운 값은 0단계 폼의 보이는 칸에 있어야 하고(hidden 아님), 문장은 응답에 남지 않아야 하며,
-        상자가 비었으면 모델 호출이 0 이어야 한다** (R2 · `0060` D6 · `prereg-29`) — 사용자가 못 보는 값은 확인이
+        상자가 비었으면 모델 호출이 0 이어야 하고, 금액 두 칸은 채우지 않아야 하며, 적힌 금액 옆에는 한글 읽기가
+        있어야 한다** (R2 · `0060` D6 · 반증 조건 4 · `prereg-29`) — 사용자가 못 보는 값도, 읽을 수 없는 값도 확인이
         아니다. 검사는 모델 대신 가짜 호출을 꽂아 본다 (서빙 없이 돈다)
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
@@ -259,7 +260,11 @@ def check_prefill(tag: str) -> list[dict]:
         bad.append(hit(f"문장 하나에 호출 {len(calls)}"))
     if out.get("company") != "우리" or "company" in filled:
         bad.append(hit(f"사용자가 적은 은행 칸을 덮었다: {out.get('company')!r}"))
-    expect = {k: v for k, v in fake.items() if k != "company"}
+    # 금액 두 칸은 모델이 값을 내도 **채우지 않는다** (`0060` 반증 조건 4 발동 · `prereg-29` §7)
+    expect = {k: v for k, v in fake.items() if k not in ("company", "amount_deposit", "amount_monthly")}
+    for k in ("amount_deposit", "amount_monthly"):
+        if out.get(k) or k in filled:
+            bad.append(hit(f"금액 칸 {k} 을 미리 채웠다 — 반증 조건 4 뒤에는 채우지 않는다"))
     if set(filled) != set(expect) or any(out.get(k) != v for k, v in expect.items()):
         bad.append(hit(f"채운 칸이 다르다: {filled} · {out}"))
     html = RENDER.render_start(out, None, {}, prefilled=filled, prefill_notice=notice, prefill_failed=failed)
@@ -275,6 +280,11 @@ def check_prefill(tag: str) -> list[dict]:
             bad.append(hit(f"{k} 가 hidden 으로 실렸다"))
         if not re.search(rf'<label for="{k}">[^<]*<b[^>]*>[^<]*채움', html):
             bad.append(hit(f"{k} 에 '문장에서 채움' 표시가 없다"))
+    # 금액을 사용자가 적으면 옆에 한글 읽기가 붙어야 한다 — 읽을 수 없는 값은 확인된 값이 아니다
+    html_amt = RENDER.render_start({**out, "amount_deposit": "30000000", "amount_monthly": "30만원"}, None, {})
+    for k, words in (("amount_deposit", "삼천만 원"), ("amount_monthly", "삼십만 원")):
+        if words not in html_amt:
+            bad.append(hit(f"{k} 옆에 한글 읽기 '{words}' 가 없다"))
     # (마) 서빙 없음 → 실패 안내 · 폼 그대로 · 500 아님
     out2, filled2, notice2, failed2 = APP.prefill_fields(dict(f1), marker, lambda t: ({}, 0.0, "URLError: refused"))
     if out2 != f1 or filled2 or not failed2 or not notice2:

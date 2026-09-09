@@ -376,7 +376,7 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
 
 # ── R2 스코프 미리 채움 (D8 · 이슈 #73 · `0060` D6 · `prereg-29`)
 #
-# 0단계 폼의 "내 상황" 상자를 **로컬 모델**이 읽어 다섯 칸(권역·은행·예금/적금·기간·금액)을 채운 채
+# 0단계 폼의 "내 상황" 상자를 **로컬 모델**이 읽어 네 칸(권역·은행·예금/적금·기간)을 채운 채 — 금액은 `0060` 반증 조건 4 발동으로 뺐다 —
 # 같은 폼을 다시 그린다. 사용자가 고쳐서 "목록 보기" 를 누른다 — 그 제출은 `/screen` 이고 거기는 손대지 않았다.
 #
 # 지키는 것 — (1) 문장은 모델 호출에만 쓰고 응답 HTML 에 되돌려 넣지 않는다 · 로그 없음 (`0042` D3)
@@ -417,10 +417,9 @@ def prefill_fields(f: dict[str, str], text: str,
         filled.append(k)
     if not filled:
         return out, [], PREFILL_NOTHING, False
-    labels = {"group": "권역", "company": "은행", "kinds": "예금/적금", "term": "기간",
-              "amount_deposit": "예금 금액", "amount_monthly": "적금 월 납입"}
+    labels = {"group": "권역", "company": "은행", "kinds": "예금/적금", "term": "기간"}
     notice = ("문장에서 " + " · ".join(labels[k] for k in filled) + " 을(를) 채웠습니다 — "
-              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 문장은 서버에 남지 않았습니다")
+              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 금액은 직접 적어 주세요. 문장은 서버에 남지 않았습니다")
     return out, filled, notice, False
 
 
