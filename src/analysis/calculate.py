@@ -1124,6 +1124,38 @@ def parse_amount(raw: str) -> int:
     return int(m.group(1)) * MONEY_UNIT.get(m.group(2) or "원", 1)
 
 
+_KDIGIT = ["", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
+_KSMALL = ["", "십", "백", "천"]
+_KBIG = ["", "만", "억", "조"]
+
+
+def amount_words(n: int) -> str:
+    """원 단위 정수 → 한글 읽기. `5000000` → `오백만 원` · `50000000` → `오천만 원` · `1500000` → `백오십만 원`.
+
+    폼에 미리 채운 금액을 사람이 **읽을 수 있게** 옆에 붙이는 용도다 (`prereg-29` 사람 세션 비고 — 사용자가 `5000000` 을 읽지
+    못해 500만원인지 5천만원인지 확인할 수 없었다. 읽을 수 없는 값은 확인된 값이 아니다 · A19 의 취지).
+    """
+    if n <= 0:
+        return "영 원"
+    parts = []
+    big = 0
+    while n > 0:
+        chunk, n = n % 10000, n // 10000
+        if chunk:
+            words = ""
+            for i in range(3, -1, -1):
+                d = (chunk // 10 ** i) % 10
+                if not d:
+                    continue
+                # 십·백·천 앞의 1 은 읽지 않는다 (일백 → 백). 만·억 앞은 읽는다 — 단 맨 앞 "일만" 은 "만" 으로
+                words += ("" if d == 1 and i > 0 else _KDIGIT[d]) + _KSMALL[i]
+            if words == "일" and big == 1:          # "일만" → "만". 억·조 앞의 일은 읽는다 ("일억")
+                words = ""
+            parts.append(words + _KBIG[big])
+        big += 1
+    return "".join(reversed(parts)) + " 원"
+
+
 def interest(s: dict, amounts: dict | None, tax: dict) -> dict | None:
     """상품 하나의 **예상 이자**(원). 금액이 없으면 None.
 
