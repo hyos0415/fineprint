@@ -1101,6 +1101,9 @@ PP_NOTE = "%p 는 퍼센트포인트 — 금리의 차이입니다 (3.0% → 3.5
 # `evaluate()` 가 낸 `gross_lo`·`gross_hi`·`tax_rate` 위의 산수다. 가정 셋은 화면에 한 줄로 나간다.
 INTEREST_NOTE = ("예상 이자는 만기에 한 번 받는 것으로 보고, 복리는 월복리로, 자유적립식은 매달 같은 금액을 "
                  "넣는 것으로 계산한 값입니다")
+# 월 환산 (E4-2 · `prereg-30` · 이슈 #78) — "월 이자" 가 아니다. 공시에 지급 방식 칸이 없어 어느 상품이 월 지급인지 모른다
+MONTHLY_NOTE = ("월로 환산한 값은 만기 이자를 개월 수로 나눈 것입니다. 실제 지급 시기와 방식(만기 일시 · 월 지급)은 "
+                "상품마다 다릅니다")
 # 3층(금융소득종합과세) 게이트 문장 — `design.md` "선을 넘을 때만" · 최종 세액은 내지 않는다
 OVER_LINE_NOTE = ("이 상품 이자만으로 금융소득종합과세 기준(연 {limit})을 넘습니다 — "
                   "세후는 다른 소득에 따라 더 낮아질 수 있습니다")
@@ -1189,10 +1192,17 @@ def interest(s: dict, amounts: dict | None, tax: dict) -> dict | None:
         gate, note = "경계 근처", NEAR_LINE_NOTE.format(limit=won(limit))
     else:
         gate, note = "안 넘음", ""
-    return {"금액": amt, "금액_뜻": "예치 금액" if s["kind"] == "예금" else "월 납입액",
-            "개월": n, "방식": "복리(월복리로 계산)" if compound else "단리",
-            "세전": (round(lo), round(hi)), "세후": (round(lo * (1 - rate)), round(hi * (1 - rate))),
-            "종합과세": gate, "종합과세_문장": note, "기준_원": limit, "가정": INTEREST_NOTE}
+    out = {"금액": amt, "금액_뜻": "예치 금액" if s["kind"] == "예금" else "월 납입액",
+           "개월": n, "방식": "복리(월복리로 계산)" if compound else "단리",
+           "세전": (round(lo), round(hi)), "세후": (round(lo * (1 - rate)), round(hi * (1 - rate))),
+           "종합과세": gate, "종합과세_문장": note, "기준_원": limit, "가정": INTEREST_NOTE,
+           # 월 환산 — **예금만** (`prereg-30`). 적금은 매달 넣는 돈이 달라 "월 이자" 가 성립하지 않는다. 총액 위의 나눗셈 하나다
+           "월환산": None, "월환산_문장": ""}
+    if s["kind"] == "예금" and n > 0:
+        out["월환산"] = {"세전": (round(lo / n), round(hi / n)),
+                        "세후": (round(lo * (1 - rate) / n), round(hi * (1 - rate) / n))}
+        out["월환산_문장"] = MONTHLY_NOTE
+    return out
 BONUS_NOTE = "우대조건은 조건을 채우면 금리를 더 주는 것입니다"
 
 
