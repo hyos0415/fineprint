@@ -39,6 +39,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.parse
 from pathlib import Path
@@ -56,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
 import prefs as P  # noqa: E402
+import r2_parse as R2  # noqa: E402
 import report as R  # noqa: E402
 import view as V  # noqa: E402
 
@@ -370,6 +372,70 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
         cur = vm["questions"].get("현재") or {}
         notice = cur.get("빈_제출_안내") or "은행을 하나 이상 골라 주세요"
     return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state))
+
+
+# ── R2 스코프 미리 채움 (D8 · 이슈 #73 · `0060` D6 · `prereg-29`)
+#
+# 0단계 폼의 "내 상황" 상자를 **로컬 모델**이 읽어 다섯 칸(권역·은행·예금/적금·기간·금액)을 채운 채
+# 같은 폼을 다시 그린다. 사용자가 고쳐서 "목록 보기" 를 누른다 — 그 제출은 `/screen` 이고 거기는 손대지 않았다.
+#
+# 지키는 것 — (1) 문장은 모델 호출에만 쓰고 응답 HTML 에 되돌려 넣지 않는다 · 로그 없음 (`0042` D3)
+#           (2) 조건 답·거래 은행은 채우지 않는다 (`0060` D1·D3) — 읽는 것은 스코프 다섯 칸뿐이다
+#           (3) 빈 상자면 모델을 부르지 않는다 · 서빙이 없으면 한 줄 안내와 함께 폼이 그대로 동작한다
+#           (4) 채운 값은 **보이는 칸**에 들어간다 (A19) — hidden 으로 실어 보내지 않는다
+R2_URL = os.environ.get("R2_URL", R2.DEFAULT_URL)
+PREFILL_DEFAULTS = {"group": "bank", "term": "12"}      # select 는 늘 값이 있다 — 기본값 그대로면 "비어 있다" 로 본다
+PREFILL_EMPTY = "문장이 비어 있어 채운 것이 없습니다 — 아래 칸을 직접 골라 주세요"
+PREFILL_UNAVAILABLE = "지금은 문장으로 채울 수 없습니다 (이 컴퓨터의 모델 서버가 꺼져 있습니다) — 아래 칸을 직접 골라 주세요"
+PREFILL_NOTHING = "문장에서 채울 수 있는 칸이 없었습니다 — 아래 칸을 직접 골라 주세요"
+
+
+def prefill_fields(f: dict[str, str], text: str,
+                   caller=None) -> tuple[dict[str, str], list[str], str, bool]:
+    """폼 + 문장 → (채워진 폼, 채운 칸 이름, 안내 한 줄, 실패 여부). **문장은 돌려주지 않는다.**
+
+    빈 칸만 채운다 — 사용자가 이미 적은 값이 모델 값보다 앞선다 (`prereg-29` §2). select(권역·기간)는 늘 값이
+    있으므로 **기본값 그대로일 때만** 비어 있는 것으로 본다. 빈 문장이면 호출 0 이다.
+    `caller` 는 검사가 모델 대신 꽂는 함수다 (A19 검사 · 호출 0 을 확인하는 데도 쓴다).
+    """
+    text = (text or "").strip()
+    if not text:
+        return f, [], PREFILL_EMPTY, False
+    caller = caller or (lambda t: R2.prefill(t, R2_URL))
+    values, _secs, err = caller(text)
+    if err:
+        return f, [], PREFILL_UNAVAILABLE, True
+    out, filled = dict(f), []
+    for k in R2.PREFILL_FIELDS:
+        v = values.get(k)
+        if not v:
+            continue
+        cur = (f.get(k) or "").strip()
+        if cur and cur != PREFILL_DEFAULTS.get(k):
+            continue                       # 사용자가 적은 칸 — 덮지 않는다
+        out[k] = v
+        filled.append(k)
+    if not filled:
+        return out, [], PREFILL_NOTHING, False
+    labels = {"group": "권역", "company": "은행", "kinds": "예금/적금", "term": "기간",
+              "amount_deposit": "예금 금액", "amount_monthly": "적금 월 납입"}
+    notice = ("문장에서 " + " · ".join(labels[k] for k in filled) + " 을(를) 채웠습니다 — "
+              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 문장은 서버에 남지 않았습니다")
+    return out, filled, notice, False
+
+
+@app.post("/prefill", response_class=HTMLResponse, summary="0단계 폼을 문장으로 미리 채운다 (R2)")
+async def prefill_html(request: Request) -> str:
+    """같은 0단계 폼을 **채운 채** 다시 낸다. 계산은 하지 않는다 — `/screen` 이 한다."""
+    try:
+        f = _flat(await _form(request))
+    except HTTPException as e:
+        return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu()), status_code=e.status_code)
+    text = f.pop("situation", "")          # 폼 dict 에서 뺀다 — 템플릿에도, 다음 hidden 에도 가지 않는다
+    form, filled, notice, failed = prefill_fields(f, text)
+    del text
+    return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
+                               prefill_notice=notice, prefill_failed=failed)
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다

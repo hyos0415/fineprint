@@ -13,19 +13,38 @@
 {% endif %}
 
 <form method="post" action="/screen">
+  {# 글자 칸에서 Enter 를 치면 폼의 **첫 번째** 제출 버튼이 눌린다. 그게 "칸 채우기" 가 되면 모델이 뜻밖에 불린다 —
+     보이지 않는 "목록 보기" 를 맨 앞에 두어 Enter 는 지금처럼 목록으로 가게 한다 (JS 없음) #}
+  <button type="submit" style="display:none" tabindex="-1" aria-hidden="true">목록 보기</button>
+  {# 내 상황 — 자연어 한 문장으로 아래 다섯 칸을 **미리 채운다** (R2 · `0060` D6 · `prereg-29`).
+     같은 폼 안의 두 번째 버튼(formaction=/prefill · JS 없음)이라 사용자가 이미 적은 칸이 그대로 함께 간다 — 서버는 빈 칸만 채운다.
+     모델은 채우기만 하고 판정하지 않는다 — 값은 아래 **보이는 칸**에 들어가고 사용자가 고쳐서 낸다(A19).
+     문장은 서버가 응답을 만든 뒤 버린다 · 이 상자는 되돌려 채우지 않는다. 비우고 "목록 보기" 를 누르면 지금과 같다. #}
+  <h2>내 상황을 한 문장으로 <span class="notice">(선택 — 아래 칸을 대신 채워 줍니다)</span></h2>
+  <div>
+    <textarea id="situation" name="situation" rows="2" style="width:100%; font:inherit"
+              placeholder="예: 우리은행 적금 1년, 매달 30만원"></textarea>
+    <span class="notice">문장은 이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간 · 금액</b>만 채웁니다.
+      조건 답은 채우지 않습니다. 문장은 서버에 남지 않습니다.</span>
+  </div>
+  <p><button type="submit" formaction="/prefill">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
+  {% if prefill_notice %}
+  <p class="card {% if prefill_failed %}warn{% endif %}"><b>{{ prefill_notice }}</b></p>
+  {% endif %}
+
   <h2>어디서 찾을까요</h2>
   <div class="row">
     <div>
-      <label for="group">권역</label>
+      <label for="group">권역{% if "group" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <select id="group" name="group">
         <option value="bank" {% if form.get('group','bank') == 'bank' %}selected{% endif %}>은행</option>
         <option value="savingsbank" {% if form.get('group') == 'savingsbank' %}selected{% endif %}>저축은행</option>
       </select>
     </div>
     <div>
-      <label for="term">가입 기간(개월)</label>
+      <label for="term">가입 기간(개월){% if "term" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <select id="term" name="term">
-        {% for t in [6, 12, 24, 36] %}
+        {% for t in 기간들 %}
         <option value="{{ t }}" {% if form.get('term', 12)|int == t %}selected{% endif %}>{{ t }}개월</option>
         {% endfor %}
       </select>
@@ -62,12 +81,12 @@
 
   <div class="row">
     <div class="grow">
-      <label for="company">은행 좁히기 (선택 · 쉼표로 여럿)</label>
+      <label for="company">은행 좁히기 (선택 · 쉼표로 여럿){% if "company" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="company" type="text" name="company" value="{{ form.get('company', '') }}"
              placeholder="예: 우리,농협">
     </div>
     <div class="grow">
-      <label for="kinds">예금 / 적금 (선택)</label>
+      <label for="kinds">예금 / 적금 (선택){% if "kinds" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="kinds" type="text" name="kinds" value="{{ form.get('kinds', '') }}"
              placeholder="예금 또는 적금">
     </div>
@@ -79,12 +98,12 @@
   <h2>얼마를 넣으실 건가요 <span class="notice">(선택 — 예상 이자를 원 단위로 보여줍니다)</span></h2>
   <div class="row">
     <div class="grow">
-      <label for="amount_deposit">예금 — 한 번에 넣을 금액</label>
+      <label for="amount_deposit">예금 — 한 번에 넣을 금액{% if "amount_deposit" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="amount_deposit" type="text" name="amount_deposit" value="{{ form.get('amount_deposit', '') }}"
              placeholder="예: 5천만원 또는 50000000">
     </div>
     <div class="grow">
-      <label for="amount_monthly">적금 — 매달 넣을 금액</label>
+      <label for="amount_monthly">적금 — 매달 넣을 금액{% if "amount_monthly" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <input id="amount_monthly" type="text" name="amount_monthly" value="{{ form.get('amount_monthly', '') }}"
              placeholder="예: 100만원 또는 1000000">
     </div>

@@ -47,6 +47,9 @@
     A18 **가입 금액이 있으면 리포트(텍스트·웹)에 예상 이자가 세전·세후 원 숫자와 가정 한 줄로 있어야
         하고, 금액이 없으면 예상 이자 칸이 없어야 한다** (E4 · `prereg-25`) — 원 단위 숫자도 %와 같이
         무엇을 말하는 숫자인지 밝혀야 한다(A12 와 같은 태도). 검사는 예금 5천만원 · 적금 월 100만원을 넣고 본다
+    A19 **문장으로 미리 채운 값은 0단계 폼의 보이는 칸에 있어야 하고(hidden 아님), 문장은 응답에 남지 않아야 하며,
+        상자가 비었으면 모델 호출이 0 이어야 한다** (R2 · `0060` D6 · `prereg-29`) — 사용자가 못 보는 값은 확인이
+        아니다. 검사는 모델 대신 가짜 호출을 꽂아 본다 (서빙 없이 돈다)
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -218,6 +221,70 @@ def check_labels(screen: str) -> list[dict]:
     return bad
 
 
+def check_prefill(tag: str) -> list[dict]:
+    """A19 — 문장으로 미리 채운 폼 (R2 · `prereg-29`). **모델 없이** 가짜 호출로 본다.
+
+    (가) 채운 값이 전부 **보이는 칸**(input value · 고른 option)에 있고 hidden 에는 없다
+    (나) 문장(원문)이 응답 HTML 어디에도 없다
+    (다) 상자가 비었으면 모델을 부르지 않는다 (호출 0)
+    (라) 사용자가 이미 적은 칸은 덮지 않는다
+    (마) 모델 서버가 없어도(호출 실패) 폼이 그대로 나온다
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "web"))
+    import app as APP
+    import render as RENDER
+
+    def hit(detail: str) -> dict:
+        return {"assert": "A19", "product": "-", "session": tag, "step": -1, "detail": f"[웹] {detail}"}
+
+    bad: list[dict] = []
+    marker = "A19검사용원문표지문장"
+    fake = {"group": "savingsbank", "company": "웰컴저축은행,페퍼저축은행", "kinds": "적금", "term": "18",
+            "amount_deposit": "30000000", "amount_monthly": "300000"}
+    calls: list[str] = []
+
+    def caller(t):
+        calls.append(t); return dict(fake), 0.0, None
+
+    # (다) 빈 상자 → 호출 0 · 폼 그대로
+    f0 = {"group": "bank", "term": "12", "company": "우리"}
+    out, filled, _n, failed = APP.prefill_fields(dict(f0), "   ", caller)
+    if calls or filled or out != f0 or failed:
+        bad.append(hit(f"빈 상자인데 호출 {len(calls)} · 채운 칸 {filled} · 폼 변경 {out != f0}"))
+    # (가)(나)(라) 채움 — 사용자가 적은 은행 칸은 그대로, 나머지는 보이는 칸에
+    f1 = {"group": "bank", "term": "12", "company": "우리", "kinds": "", "amount_deposit": "", "amount_monthly": ""}
+    out, filled, notice, failed = APP.prefill_fields(dict(f1), marker, caller)
+    if len(calls) != 1:
+        bad.append(hit(f"문장 하나에 호출 {len(calls)}"))
+    if out.get("company") != "우리" or "company" in filled:
+        bad.append(hit(f"사용자가 적은 은행 칸을 덮었다: {out.get('company')!r}"))
+    expect = {k: v for k, v in fake.items() if k != "company"}
+    if set(filled) != set(expect) or any(out.get(k) != v for k, v in expect.items()):
+        bad.append(hit(f"채운 칸이 다르다: {filled} · {out}"))
+    html = RENDER.render_start(out, None, {}, prefilled=filled, prefill_notice=notice, prefill_failed=failed)
+    if marker in html:
+        bad.append(hit("문장(원문)이 응답 HTML 에 남았다"))
+    for k, v in expect.items():
+        vis = (re.search(rf'<input[^>]*name="{k}"[^>]*value="{re.escape(v)}"', html)
+               or re.search(rf'<select[^>]*name="{k}".*?<option value="{re.escape(v)}"[^>]*selected', html, re.S))
+        hidden = re.search(rf'<input[^>]*type="hidden"[^>]*name="{k}"', html)
+        if not vis:
+            bad.append(hit(f"{k}={v} 가 보이는 칸에 없다"))
+        if hidden:
+            bad.append(hit(f"{k} 가 hidden 으로 실렸다"))
+        if not re.search(rf'<label for="{k}">[^<]*<b[^>]*>[^<]*채움', html):
+            bad.append(hit(f"{k} 에 '문장에서 채움' 표시가 없다"))
+    # (마) 서빙 없음 → 실패 안내 · 폼 그대로 · 500 아님
+    out2, filled2, notice2, failed2 = APP.prefill_fields(dict(f1), marker, lambda t: ({}, 0.0, "URLError: refused"))
+    if out2 != f1 or filled2 or not failed2 or not notice2:
+        bad.append(hit("모델 서버가 없을 때 폼이 그대로 나오지 않는다"))
+    html2 = RENDER.render_start(out2, None, {}, prefilled=filled2, prefill_notice=notice2, prefill_failed=failed2)
+    if marker in html2 or 'action="/screen"' not in html2:
+        bad.append(hit("실패 화면에 원문이 남거나 목록 보기 폼이 없다"))
+    return bad
+
+
 def check_web(scored: list[dict], plan: dict, state: dict, total: int,
               prefs: dict | None, tag: str,
               outside: dict | None = None,
@@ -255,6 +322,8 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
                      "0단계 폼(오류)")):
         for v in check_words(visible(화면), 이름):
             bad += hit("A14", v["product"], v["detail"])
+    # A19 — 문장으로 미리 채운 폼 (R2). 모델 없이 가짜 호출로 본다
+    bad += check_prefill(tag)
     # A12·A13 — 세후 라벨과 고지. 문구는 상수에서 온다(사본을 만들지 않는다)
     if "%" in html and "세후" not in html:
         bad += hit("A12", "-", "금리가 있는 화면에 `세후` 라벨이 없다")
@@ -668,7 +737,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A15", "행동 조건에 기댄 금리는 전제를 말한다"),
                        ("A16", "같은 상품은 한 줄 · 다른 행의 숫자는 남는다"),
                        ("A17", "기관 링크·전화가 있고 URL 은 API 값 그대로다"),
-                       ("A18", "예상 이자(원)에는 세전·세후 라벨과 가정이 붙는다")):
+                       ("A18", "예상 이자(원)에는 세전·세후 라벨과 가정이 붙는다"),
+                       ("A19", "문장으로 채운 값은 보이는 칸에 · 원문은 남지 않는다")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue

@@ -48,19 +48,41 @@ _env = Environment(
 )
 
 
+TERM_MENU = (6, 12, 24, 36)
+
+
 def render_start(form: dict | None = None, error: str | None = None,
-                 snapshots: dict[str, list[str]] | None = None) -> str:
+                 snapshots: dict[str, list[str]] | None = None,
+                 prefilled: tuple[str, ...] | list[str] | set[str] = (),
+                 prefill_notice: str | None = None, prefill_failed: bool = False) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
     확인해야 한다(`0016`·`0024` P5).
+
+    `prefilled` 는 **문장에서 채운 칸의 이름**이다 (R2 · `prereg-29` · A19). 템플릿은 그 칸 옆에
+    "문장에서 채움 — 확인하세요" 를 붙이기만 한다 — 무엇을 채웠는지는 서버가 정했다.
+    `prefill_notice` 는 채우기 뒤에 한 줄 (성공·실패·빈 상자). 문장 자체는 여기 오지 않는다.
     """
+    form = form or {}
+    # 기간 메뉴 — 모델이 낸 기간이 메뉴 밖(예: 18)이면 그 값을 더해 **보이게** 한다. 조용히 12 로 바꾸지 않는다
+    terms = list(TERM_MENU)
+    try:
+        t = int(str(form.get("term", "")).strip() or 0)
+    except ValueError:
+        t = 0
+    if t and t not in terms:
+        terms = sorted(terms + [t])
     return _env.get_template("start.html").render(
-        form=form or {},
+        form=form,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
         목록축=P.LIST_AXIS,
         스냅샷=snapshots or {},          # 권역별로 있는 날짜 — 비우면 최신 (이슈 #52)
         error=error,
+        기간들=terms,
+        채운칸=set(prefilled),
+        prefill_notice=prefill_notice,
+        prefill_failed=prefill_failed,
     )
 
 
