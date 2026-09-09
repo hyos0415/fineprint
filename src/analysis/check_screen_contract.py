@@ -47,7 +47,8 @@
     A18 **가입 금액이 있으면 리포트(텍스트·웹)에 예상 이자가 세전·세후 원 숫자와 가정 한 줄로 있어야
         하고, 금액이 없으면 예상 이자 칸이 없어야 한다** (E4 · `prereg-25`) — 원 단위 숫자도 %와 같이
         무엇을 말하는 숫자인지 밝혀야 한다(A12 와 같은 태도). 검사는 예금 5천만원 · 적금 월 100만원을 넣고 본다.
-        **월 환산**(`prereg-30`)은 예금에만 있고 그 옆에 "지급 시기는 상품마다 다르다" 문장이 있어야 하며, 적금에는 없어야 한다
+        **월 환산**(`prereg-30`)은 예금에만 있고 그 옆에 "지급 시기는 상품마다 다르다" 문장이 있어야 하며, 적금에는 없어야 한다.
+        **세금 설명**(`prereg-31`) — 리포트 끝에 제목 · 근거 조문(설정 파일 글자 그대로) · 세금 원 = 세전 − 세후 가 있어야 한다
     A19 **문장으로 미리 채운 값은 0단계 폼의 보이는 칸에 있어야 하고(hidden 아님), 문장은 응답에 남지 않아야 하며,
         상자가 비었으면 모델 호출이 0 이어야 하고, 금액 두 칸은 채우지 않아야 하며, 적힌 금액 옆에는 한글 읽기가
         있어야 한다** (R2 · `0060` D6 · 반증 조건 4 · `prereg-29`) — 사용자가 못 보는 값도, 읽을 수 없는 값도 확인이
@@ -178,6 +179,32 @@ def check_org_names(text: str, scored: list[dict], where: str) -> list[dict]:
 
 # A18 이 리포트·웹에 넣는 가입 금액 — 예금 5천만원 · 적금 월 100만원 (`prereg-25` P2 의 "현실적 금액")
 CHECK_AMOUNTS = {"예금": 50_000_000, "적금": 1_000_000}
+
+
+def check_tax_explained(reports: list[dict], text: str) -> list[tuple[str, str]]:
+    """A18 확장 (`prereg-31`) — 세율이 보이는 리포트에는 **근거 조문**(설정 파일 글자 그대로)과 제목이 있어야 하고,
+    가입 금액이 있으면 "세금 ○원" 이 세전 − 세후 와 같아야 한다."""
+    bad = []
+    for rep in reports:
+        tx = rep.get("세금설명")
+        if not tx:
+            bad.append((rep["상품"], "세금 설명이 없다")); continue
+        if tx["제목"] not in text:
+            bad.append((rep["상품"], "세금 설명 제목이 화면에 없다"))
+        for art in tx["조문"]:
+            if art not in text:
+                bad.append((rep["상품"], f"조문 '{art}' 이 화면에 없다"))
+        m = tx["금액"]
+        if rep.get("이자") and not m:
+            bad.append((rep["상품"], "금액이 있는데 세금 원 줄이 없다"))
+        if m:
+            for i in (0, 1):
+                if m["세금"][i] != m["세전"][i] - m["세후"][i]:
+                    bad.append((rep["상품"], "세금 원이 세전 − 세후 와 다르다"))
+            for v in set(m["세금"]):
+                if not m["비과세_적용"] and C.won(v) not in text:
+                    bad.append((rep["상품"], f"세금 {C.won(v)} 이 화면에 없다"))
+    return bad
 
 
 def check_interest(reports: list[dict], text: str) -> list[tuple[str, str]]:
@@ -383,6 +410,7 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
             break
     # A18 — 예상 이자(원)가 있으면 세전·세후 원 숫자와 가정 한 줄이 화면에 있어야 한다 (E4)
     bad += [hit("A18", p, d)[0] for p, d in check_interest(reports, seen)]
+    bad += [hit("A18", p, d)[0] for p, d in check_tax_explained(reports, seen)]   # 세금 설명 (`prereg-31`)
     # A3 — 사유는 **문장**으로 나가야 한다. 그리고 태그는 **라벨**이어야 한다 (A14)
     for r in vm["notices"]["사유"]:
         if r["문장"] not in html:
@@ -429,9 +457,9 @@ def check_report(scored: list[dict], top: int, prefs: dict | None,
                      + check_org_names(text, scored, "리포트"))]
     main = L.ranked(scored, prefs)[:top]
     # A18 — 리포트 텍스트에도 예상 이자의 세전·세후·가정이 있어야 한다 (E4)
+    reps_amt = [R.build(s, i, prefs, CHECK_AMOUNTS) for i, s in enumerate(main, 1)]
     bad += [{"assert": "A18", "product": p, "session": tag, "step": -1, "detail": f"[리포트] {d}"}
-            for p, d in check_interest([R.build(s, i, prefs, CHECK_AMOUNTS)
-                                        for i, s in enumerate(main, 1)], text)]
+            for p, d in check_interest(reps_amt, text) + check_tax_explained(reps_amt, text)]
     # 금액이 없으면 예상 이자 칸이 **없어야** 한다 — 없는 숫자를 만들지 않는다
     if "예상 이자" in R.render_all(scored, top, prefs):
         bad.append({"assert": "A18", "product": "-", "session": tag, "step": -1,

@@ -1470,6 +1470,35 @@ def bonus_range(items: list[dict], cap: float | None, state: dict) -> dict:
     return {"lo": lo, "hi": hi, "met": met, "unmet": unmet, "unknown": unknown}
 
 
+TAX_EXPLAIN_TITLE = "세금은 이렇게 계산했습니다"
+
+
+def tax_explained(s: dict, it: dict | None, tax: dict) -> dict:
+    """리포트 끝의 "세금은 이렇게 계산했습니다" 재료 (E4-3 · `prereg-31` · 이슈 #80).
+
+    **숫자와 조문은 전부 `tax-2026.json` 에서 읽는다** — 코드에 14 · 1.4 · 조문 번호를 다시 적지 않는다(`0032`).
+    세금 원은 **세전 − 세후**(계산기가 이미 낸 두 값의 차)다 — 따로 곱하면 반올림으로 1원 다를 수 있다.
+    최종 세액은 내지 않는다(`design.md` 3층). 텍스트·웹은 이 dict 를 꽂기만 한다.
+    """
+    g, ex, comp = tax["일반과세"], tax["비과세종합저축"], tax["금융소득종합과세"]
+    pct = lambda r: f"{r * 100:g}%"
+    rate = s["tax_rate"]
+    lines = {"제목": TAX_EXPLAIN_TITLE, "세율": rate, "금액": None,
+             "일반과세": (f"{pct(g['합계'])} = 이자소득세 {pct(g['이자소득세'])} ({g['조문']['이자소득세']}) + "
+                        f"지방소득세 {pct(g['지방소득세'])} ({g['조문']['지방소득세']} · 소득세의 10%)"),
+             "비과세": (f"비과세종합저축 대상({' · '.join(ex['대상_후보'][:2])} 등)이면 {pct(ex['세율'])} — {ex['조문']} · "
+                      f"원금 {won(ex['한도_원'])} · {ex['가입기한']} 가입분까지"),
+             "종합과세": (f"연 이자·배당 합계 {won(comp['기준금액_원'])}({comp['조문']})을 넘으면 초과분은 종합과세 — "
+                       f"이 화면은 넘는지만 말하고 세액은 계산하지 않습니다"),
+             "조문": [g["조문"]["이자소득세"], g["조문"]["지방소득세"], ex["조문"], comp["조문"]]}
+    if it:
+        gross, net = it["세전"], it["세후"]
+        tax_won = (gross[0] - net[0], gross[1] - net[1])
+        lines["금액"] = {"세전": gross, "세율": rate, "세금": tax_won, "세후": net,
+                       "비과세_적용": rate < 1e-9}
+    return lines
+
+
 def after_tax(rate: float, tax: dict, exempt: bool = False) -> tuple[float, float]:
     """세후 금리와 적용 세율. 1층(원천징수)·2층(비과세) 까지만 다룬다."""
     r = 0.0 if exempt else tax["일반과세"]["합계"]
