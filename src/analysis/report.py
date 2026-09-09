@@ -239,6 +239,10 @@ def render(rep: dict) -> str:
         out.append(f"    예상 이자   {it['금액_뜻']} {C.won(it['금액'])} · {it['개월']}개월 · {it['방식']}")
         out.append(f"      세전   {_won_range(*it['세전'])}")
         out.append(f"      세후   {_won_range(*it['세후'])}")
+        if it.get("월환산"):
+            # 예금만 (`prereg-30`). "월 이자" 라고 쓰지 않는다 — 지급 방식은 공시에 없다
+            out.append(f"      월로 환산하면 약   세전 {_won_range(*it['월환산']['세전'])} · 세후 {_won_range(*it['월환산']['세후'])}")
+            out.append(f"      {it['월환산_문장']}")
         if it["종합과세_문장"]:
             out.append(f"      ⚠ {it['종합과세_문장']}")
         out.append(f"      {it['가정']}")
