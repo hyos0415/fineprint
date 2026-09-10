@@ -712,7 +712,7 @@ def run(stamp: str, group: str, term: int, seeds: int,
         company: str | None = None, kinds: str | None = None,
         prefs: dict | None = None, order: str = "hi") -> dict:
     tax = C.load_tax()
-    rows_all, by_pair = AB.load(stamp, group, term)
+    rows_all, by_pair = AB.load(stamp, group, term, include_no_condition=True)   # 화면과 같은 행 (#87)
     if not rows_all:
         raise SystemExit(f"{term}개월 상품이 없다")
     rows = C.scope_rows(rows_all, company, kinds)

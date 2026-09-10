@@ -113,7 +113,7 @@ def local(body: dict) -> dict:
     """**서버가 하는 것과 같은 순서로** 부른다. 순서가 달라지면 여기가 먼저 틀린다."""
     tax = C.load_tax()
     rows_all, by_pair = AB.load(body["snapshot"], body.get("group", "bank"),
-                                body.get("term", 12))
+                                body.get("term", 12), include_no_condition=True)   # 서버와 같은 행 (#87)
     prefs = P.parse(body.get("prefs"))
     rows = C.scope_rows(rows_all, body.get("company"), body.get("kinds"))
     state = body.get("state", {})

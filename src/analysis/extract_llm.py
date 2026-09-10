@@ -211,11 +211,15 @@ def api_key() -> str:
     raise SystemExit("ANTHROPIC_API_KEY를 찾지 못했다 (.env 확인)")
 
 
-def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
+def load_pairs(stamp: str, group: str, include_no_condition: bool = False) -> tuple[list[dict], list[dict]]:
     """행 목록과 호출할 (조건문, 기간) 쌍 목록을 만든다.
 
     행은 채점 단위(닫힘률), 쌍은 호출 단위(McNemar·비용)다 — `prereg-03` §2.1.
     금리(base/max)는 행에만 담고 **쌍에는 담지 않는다.** 쌍이 추출기에 가는 것이다.
+
+    `include_no_condition=True` 면 우대조건이 없는 상품(`spcl_cnd` 없음·해당무·-)도 **행**으로 낸다 — `pair_id` 없음 ·
+    `no_condition=True` · 쌍은 만들지 않는다(호출 비용 0). 화면 경로(웹·CLI·화면 계약 검사)만 이 값을 켠다 (이슈 #87 · `prereg-36` · `0063`).
+    측정 경로(게이트 · 추출 지표)는 기본값 False 로 분모가 그대로다 — 측정 뒤 정의를 바꾸지 않는다.
     """
     suffix = "" if group == "bank" else f"_{group}"
     rows, pairs, seen = [], [], {}
@@ -233,14 +237,16 @@ def load_pairs(stamp: str, group: str) -> tuple[list[dict], list[dict]]:
             if not product or r1 is None or r2 is None:
                 continue
             text = product.get("spcl_cnd") or ""
-            if is_no_condition_literal(text):
-                continue                                  # 조건없음 행은 A와 같이 제외한다
+            no_cond = is_no_condition_literal(text)
+            if no_cond and not include_no_condition:
+                continue                                  # 조건없음 행은 측정(A 비교·게이트)에서 제외한다 — 화면은 넣는다(#87)
             term = int(opt["save_trm"]) if str(opt["save_trm"]).isdigit() else 12
             key = (text, term)
-            if key not in seen:
+            if not no_cond and key not in seen:
                 seen[key] = len(pairs)
                 pairs.append({"pair_id": len(pairs), "text": text, "term": term})
-            rows.append({"pair_id": seen[key], "kind": label, "code": opt["fin_prdt_cd"],
+            rows.append({"pair_id": None if no_cond else seen[key], "no_condition": no_cond,
+                         "kind": label, "code": opt["fin_prdt_cd"],
                          "name": " ".join(product["fin_prdt_nm"].split()), "term": term,
                          # 기관명 — 후보 집합(스코프)의 축이다 (`decisions/0028`).
                          # 원천에 `kor_co_nm` 으로 있는데 여기 안 담고 있었고, 그래서
