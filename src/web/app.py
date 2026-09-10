@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
+from extract_llm import load_pairs  # noqa: E402  — 카탈로그(무엇이 있나)를 세는 데만 쓴다
 import prefs as P  # noqa: E402
 import r2_parse as R2  # noqa: E402
 import report as R  # noqa: E402
@@ -233,12 +234,44 @@ def start() -> str:
     """폼이다. **자유 입력이 아니다** — 자유 입력(R2)은 `0042` 로 따로 정해 뒀고,
     그때는 로컬 모델이 첫 수신자가 되어야 한다.
     """
-    return RENDER.render_start(snapshots=_snapshot_menu())
+    return RENDER.render_start(snapshots=_snapshot_menu(), catalog=_catalog())
 
 
 def _snapshot_menu() -> dict[str, list[str]]:
     """권역별로 있는 스냅샷 — 폼이 "비우면 최신" 옆에 무엇이 최신인지 적는 데 쓴다."""
     return {g: AB.snapshots(g) for g in ("bank", "savingsbank")}
+
+
+_CATALOG: dict[str, dict] = {}
+
+
+def _catalog() -> dict[str, dict]:
+    """권역별 **무엇이 있나** — 기관 이름(표기)과 예금·적금 상품 수 (F7 · `prereg-35` 사람 검수 · 이슈 #85).
+
+    사람 검수 — *"사용자들이 지금 무슨 은행들이 있는지 모를 거 같다 … 뭔 검색을 해야할 지 모른다"*. 첫 화면이 "어느 은행?" 을 알아야
+    시작할 수 있는 것처럼 보였다. 여기서 센 것을 첫 화면이 그대로 말한다 — "은행 17곳 · 예금 38개 · 적금 59개". 그리고 은행 좁히기는
+    이름을 치는 칸이 아니라 이 목록의 체크박스가 된다. **판정이 아니라 원천의 집계다** — 최신 스냅샷의 전 기간 행에서 (기관코드, 상품코드)를 센다.
+    조건없음 상품도 센다(#87 · 화면과 같은 행). 값은 프로세스가 사는 동안 한 번만 센다.
+    """
+    if _CATALOG:
+        return _CATALOG
+    for g in ("bank", "savingsbank"):
+        try:
+            stamp = AB.latest_snapshot(g)
+            rows, _ = load_pairs(stamp, g, include_no_condition=True)
+        except SystemExit:
+            continue
+        orgs: dict[str, str] = {}                     # 공시 이름 → 표기 이름
+        products: dict[str, set] = {"예금": set(), "적금": set()}
+        for r in rows:
+            co = r.get("company") or ""
+            if co:
+                orgs[co] = C.org_label(co)
+            products.setdefault(r["kind"], set()).add((r.get("co_no"), r["code"]))
+        _CATALOG[g] = {"스냅샷": stamp,
+                       "기관": sorted(orgs.items(), key=lambda kv: kv[1]),     # [(공시 이름, 표기 이름)]
+                       "예금": len(products["예금"]), "적금": len(products["적금"])}
+    return _CATALOG
 
 
 @app.post("/screen", response_class=HTMLResponse, summary="화면 하나 (HTML)")
@@ -270,10 +303,12 @@ async def screen_html(request: Request) -> str:
     #
     # 에러 계약이 `/api/screen`(JSON)과 `POST /screen`(HTML)에서 다르다 —
     # 같은 함수를 쓰되 **답하는 모양만** 갈라진다.
+    # 은행 좁히기 — 체크박스 목록(company_pick · 공시 이름)을 쉼표 문자열 하나로 (F7). 텍스트 칸(company)이 같이 오면 둘을 합친다
+    f = _with_company_picks(f, multi)
     try:
         return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu()),
+        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu(), catalog=_catalog()),
                             status_code=e.status_code)
 
 
@@ -436,16 +471,17 @@ def prefill_fields(f: dict[str, str], text: str,
 async def prefill_html(request: Request) -> str:
     """같은 0단계 폼을 **채운 채** 다시 낸다. 계산은 하지 않는다 — `/screen` 이 한다."""
     try:
-        f = _flat(await _form(request))
+        multi = await _form(request)
+        f = _with_company_picks(_flat(multi), multi)
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu()), status_code=e.status_code)
+        return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu(), catalog=_catalog()), status_code=e.status_code)
     text = f.pop("situation", "")          # 폼 dict 에서 뺀다 — 템플릿에도, 다음 hidden 에도 가지 않는다
     # **스레드풀로 보낸다** (`prereg-34` §A). 모델 호출은 동기 urllib 로 3~30초를 기다리는데, async 핸들러 안에서 그대로 부르면
     # 이벤트 루프가 서서 **다른 사람의 "목록 보기" 까지 멈춘다** — 부하 시험 ① 에서 /screen p95 가 13 ms → 40 초였다
     form, filled, notice, failed = await run_in_threadpool(prefill_fields, f, text)
     del text
     return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
-                               prefill_notice=notice, prefill_failed=failed)
+                               prefill_notice=notice, prefill_failed=failed, catalog=_catalog())
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다
@@ -476,6 +512,15 @@ async def _form(request: Request) -> dict[str, list[str]]:
                             detail=f"폼이 아니다 (content-type={ctype!r})")
     raw = (await request.body()).decode("utf-8")
     return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
+
+def _with_company_picks(f: dict[str, str], multi: dict[str, list[str]]) -> dict[str, str]:
+    """체크박스 `company_pick`(공시 이름 · 여럿)을 `company` 쉼표 문자열로 합친다 — 서버 안쪽은 지금까지처럼 문자열 하나만 본다."""
+    picks = [p for p in multi.get("company_pick", []) if p.strip()]
+    if not picks:
+        return f
+    typed = [w.strip() for w in (f.get("company") or "").split(",") if w.strip()]
+    return {**f, "company": ",".join(dict.fromkeys(typed + picks))}
 
 
 def _flat(multi: dict[str, list[str]]) -> dict[str, str]:

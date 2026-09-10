@@ -344,16 +344,33 @@ def check_prefill(tag: str) -> list[dict]:
     return bad
 
 
-CLOSED_DETAILS = re.compile(r"<details(?![^>]*open)[^>]*>.*?</details>", re.S | re.I)
+DETAILS_TAG = re.compile(r"<details\b([^>]*)>|</details\s*>", re.I)
 
 
 def unfolded(html: str) -> str:
-    """닫힌 `<details>` 블록을 지운 HTML — **처음 열었을 때 사용자가 보는 것**이다 (A20 · `prereg-35`).
-    중첩된 닫힌 블록은 바깥 것이 지워지면 함께 사라진다. 여기 남은 글자가 "보이는 글자" 다."""
-    prev = None
-    while prev != html:
-        prev, html = html, CLOSED_DETAILS.sub(" ", html)
-    return html
+    """닫힌 `<details>` 안의 내용을 지운 HTML — **처음 열었을 때 사용자가 보는 것**이다 (A20 · `prereg-35`).
+
+    **중첩을 스택으로 센다.** 비탐욕 정규식(`<details …>.*?</details>`)은 바깥 닫힌 접기 안에 접기가 하나 더 있으면 안쪽 `</details>` 에서 멈춰
+    바깥 나머지가 "보이는 글자" 로 샜다 — A20 이 느슨해지는 방향이라 고쳤다(2026-09-10 · 시작 화면의 은행 목록 접기에서 드러났다).
+    열린 접기(`open`) 안은 보인다. 닫힌 접기 안은 그 안의 열린 접기까지 전부 안 보인다. 닫힌 접기의 `<summary>` 는 보이지만 여기서는
+    보수적으로 안 보이는 쪽으로 센다 — 계약 문장이 summary 에만 있으면 그것도 위반이다.
+    """
+    out, stack, pos, hidden_depth = [], [], 0, 0
+    for m in DETAILS_TAG.finditer(html):
+        if hidden_depth == 0:
+            out.append(html[pos:m.start()])
+        pos = m.end()
+        if m.group(0).lower().startswith("</"):
+            if stack and stack.pop():
+                hidden_depth -= 1
+        else:
+            is_closed = not re.search(r"\bopen\b", m.group(1) or "", re.I)
+            stack.append(is_closed)
+            if is_closed:
+                hidden_depth += 1
+    if hidden_depth == 0:
+        out.append(html[pos:])
+    return " ".join(out)
 
 
 def check_folding(vm: dict, html: str, tag: str, stop_html: str | None = None) -> list[dict]:

@@ -55,7 +55,8 @@ TERM_MENU = (6, 12, 24, 36)
 def render_start(form: dict | None = None, error: str | None = None,
                  snapshots: dict[str, list[str]] | None = None,
                  prefilled: tuple[str, ...] | list[str] | set[str] = (),
-                 prefill_notice: str | None = None, prefill_failed: bool = False) -> str:
+                 prefill_notice: str | None = None, prefill_failed: bool = False,
+                 catalog: dict | None = None) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
@@ -90,8 +91,15 @@ def render_start(form: dict | None = None, error: str | None = None,
     folded = ["company", "amount_deposit", "amount_monthly", "snapshot", "resume_code",
               f"pref_{P.LIST_AXIS}"] + [f"pref_{k}" for k in P.AXES]
     unfold = any(str(form.get(k) or "").strip() for k in folded) or (form.get("order") or "hi") != "hi"         or any(k in set(prefilled) for k in folded)
+    # 은행 좁히기 체크박스 — 고른(또는 문장에서 채운) 공시 이름. 그 이름이 든 권역 목록은 펼쳐서 낸다(값이 있는 칸은 보여야 한다 · A19)
+    picked = {w.strip() for w in str(form.get("company") or "").split(",") if w.strip()}
+    catalog = catalog or {}
+    open_groups = {g for g, c in catalog.items() if any(co in picked for co, _ in c.get("기관", []))}
     return _env.get_template("start.html").render(
         form=form,
+        카탈로그=catalog,
+        고른_은행=picked,
+        펼칠_권역=open_groups,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
         목록축=P.LIST_AXIS,
         스냅샷=snapshots or {},          # 권역별로 있는 날짜 — 비우면 최신 (이슈 #52)

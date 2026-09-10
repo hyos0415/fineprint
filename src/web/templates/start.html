@@ -26,7 +26,7 @@
      값은 아래 **보이는 칸**에 들어가고 사용자가 고쳐서 낸다(A19). 문장은 서버가 응답을 만든 뒤 버린다 · 이 상자는 되돌려 채우지 않는다. #}
   <h2>내 상황을 한 문장으로 <span class="notice">(선택 — 아래 칸을 대신 채워 줍니다)</span></h2>
   <textarea id="situation" name="situation" rows="2"
-            placeholder="예: 우리은행 적금 1년짜리 보고 싶어"></textarea>
+            placeholder="예: 1년짜리 적금 아무 은행이나 · 매달 20만원 정도"></textarea>
   <p class="notice">이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간</b>만 채웁니다. 금액과 조건 답은 채우지 않습니다. 문장은 서버에 남지 않습니다.</p>
   <p><button type="submit" formaction="/prefill" class="quiet">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
   {% if prefill_notice %}
@@ -34,7 +34,14 @@
     <br><a href="/">처음부터 — 칸을 모두 비운 새 화면으로</a></p>
   {% endif %}
 
-  <h2>어디서 찾을까요</h2>
+  {# 무엇이 있나 — 사람 검수: "무슨 은행이 있는지 모른다 · 뭘 검색해야 할지 모른다". 몰라도 된다는 것과 실제 있는 것을 첫 화면이 말한다.
+     숫자는 서버가 원천에서 센 것(app._catalog)이고 템플릿은 꽂기만 한다 #}
+  <h2>어디서 찾을까요 <span class="notice">— 몰라도 됩니다. 권역과 기간만 고르면 전부 보여드립니다</span></h2>
+  {% if 카탈로그 %}
+  <p class="notice">지금 있는 것 —
+    {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 카탈로그.get(g) %}<b>{{ label }} {{ 카탈로그[g]['기관']|length }}곳</b> · 예금 {{ 카탈로그[g]['예금'] }}개 · 적금 {{ 카탈로그[g]['적금'] }}개{% if not loop.last %} &nbsp;|&nbsp; {% endif %}{% endif %}{% endfor %}
+    <span class="notice">(금융감독원 공시 기준)</span></p>
+  {% endif %}
   <div class="row">
     <div class="grow">
       <label for="group">권역{% if "group" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
@@ -68,14 +75,21 @@
   <details {% if 더_펼침 %}open{% endif %}>
     <summary class="fold">더 정하기 <span class="notice">— 은행 좁히기 · 금액 · 무엇을 중요하게 보는지 · 정렬 · 이어하기</span></summary>
 
-    <div class="row">
-      <div class="grow">
-        <label for="company">은행 좁히기 (선택 · 쉼표로 여럿){% if "company" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
-        <input id="company" type="text" name="company" value="{{ form.get('company', '') }}"
-               placeholder="예: 우리,농협">
-      </div>
-    </div>
-    <p class="notice">좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
+    <h3>은행 좁히기 (선택){% if "company" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</h3>
+    <p class="notice">고르지 않으면 전부 봅니다. 좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
+    {% if 카탈로그 %}
+    {# 이름을 치는 칸이 아니라 **있는 것을 고르는** 목록 — 보이는 것은 표기 이름, 보내는 것은 공시 이름(F5). 고른 것이 있는 권역은 펼쳐서 낸다 #}
+    {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 카탈로그.get(g) %}
+    <details {% if g in 펼칠_권역 %}open{% endif %}>
+      <summary class="notice">{{ label }} {{ 카탈로그[g]['기관']|length }}곳 보기</summary>
+      {% for co, shown in 카탈로그[g]['기관'] %}
+      <label class="pick"><input type="checkbox" name="company_pick" value="{{ co }}" {% if co in 고른_은행 %}checked{% endif %}> {{ shown }}</label>
+      {% endfor %}
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
+    <input id="company" type="text" name="company" value="{{ form.get('company', '') }}" placeholder="예: 우리,농협">
+    {% endif %}
 
     {# 가입 금액 (E4 · `prereg-25`) — 있으면 상품마다 예상 이자(세전·세후 · 원)를 낸다. 금리·순서에는 들어가지 않는다 #}
     <h3>얼마를 넣으실 건가요 (선택 — 예상 이자를 원 단위로 보여줍니다)</h3>
