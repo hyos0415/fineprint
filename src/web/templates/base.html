@@ -1,4 +1,5 @@
-{# 뼈대. 판정은 하지 않는다 — 이미 정해진 문자열을 꽂기만 한다 (`0038` 반증 조건) #}
+{# 뼈대. 판정은 하지 않는다 — 이미 정해진 문자열을 꽂기만 한다 (`0038` 반증 조건).
+   F7(`prereg-35`) — 접되 계약은 접지 않는다. 여기 CSS 는 배치·크기·폰 카드만 정한다. JS 는 없다(`0061` 의 하나는 start.html 에). #}
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -6,45 +7,67 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}FINeprint{% endblock %}</title>
 <style>
-  :root { --line:#d8d8d8; --dim:#666; --warn:#8a4b00; --bg:#fff; --fg:#1a1a1a; }
+  :root { --line:#d8d8d8; --dim:#666; --warn:#8a4b00; --bg:#fff; --fg:#1a1a1a; --accent:#1a1a1a; --soft:#f6f6f6; }
   * { box-sizing: border-box; }
-  body { margin:0; padding:24px 16px 64px; background:var(--bg); color:var(--fg);
-         font:15px/1.6 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
-  main { max-width: 940px; margin: 0 auto; }
-  h1 { font-size:20px; margin:0 0 4px; }
-  h2 { font-size:16px; margin:28px 0 8px; }
-  .notice { color:var(--dim); font-size:13px; margin:2px 0; }
-  .card { border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:10px 0; }
+  body { margin:0; padding:20px 16px 64px; background:var(--bg); color:var(--fg);
+         font:16px/1.6 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size:22px; margin:0 0 6px; }
+  h2 { font-size:17px; margin:26px 0 8px; }
+  h3 { font-size:15px; margin:18px 0 6px; color:var(--dim); font-weight:600; }
+  .notice { color:var(--dim); font-size:14px; margin:2px 0; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:12px 0; background:#fff; }
   .rate { font-size:18px; font-weight:600; white-space:nowrap; }
-  .row { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  .row { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
   .grow { flex:1 1 auto; min-width:180px; }
   .tag { font-size:12px; color:var(--dim); border:1px solid var(--line);
          border-radius:999px; padding:1px 8px; white-space:nowrap; }
   .warn { color:var(--warn); }
   .bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; }
   .bar > i { display:block; height:100%; background:#4a7; }
-  .q { border:2px solid #333; border-radius:8px; padding:16px; margin:18px 0; }
+  /* 질문 카드 — 한 화면에 한 행동. 버튼은 손가락 크기(44px) */
+  .q { border:2px solid #333; border-radius:12px; padding:18px; margin:16px 0; background:#fff; }
+  .q b { font-size:17px; }
   .q blockquote { margin:8px 0; padding:8px 12px; border-left:3px solid var(--line);
-                  color:#333; background:#fafafa; white-space:pre-wrap; }
-  /* 목록 질문 — 기관을 여럿 고른다 (F6 · `prereg-15`) */
-  .pick { display:inline-block; min-width:180px; padding:6px 10px; margin:2px;
-          border:1px solid var(--line); border-radius:6px; cursor:pointer; }
-  button { font:inherit; padding:8px 18px; border:1px solid #333; border-radius:6px;
+                  color:#333; background:#fafafa; white-space:pre-wrap; font-size:14px; }
+  .q form > p, .q form > button { margin-top:12px; }
+  .pick { display:inline-block; min-width:160px; padding:10px 12px; margin:3px 2px;
+          border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  button { font:inherit; min-height:44px; padding:8px 18px; border:1px solid #333; border-radius:8px;
            background:#fff; cursor:pointer; }
-  button.primary { background:#1a1a1a; color:#fff; }
-  /* 정렬 전환 — 지금 무슨 순서인지 말하고 한 번에 바꾼다 (`prereg-14` §8) */
+  button.primary { background:var(--accent); color:#fff; font-size:17px; padding:12px 24px; width:100%; }
+  button.quiet { border-color:var(--line); color:var(--dim); min-height:36px; font-size:14px; }
+  /* 요약 카드 — 성과 줄이 사는 자리 (계약 · 접지 않는다) */
+  .summary { border:1px solid var(--line); border-left:6px solid var(--accent); border-radius:10px;
+             padding:14px 16px; margin:12px 0; background:var(--soft); }
+  .summary .headline { font-size:20px; font-weight:700; margin:0 0 2px; }
   .sortbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
-             margin:8px 0 16px; padding:8px 12px; border:1px solid var(--line);
-             border-radius:6px; }
-  .sortbar button { padding:5px 12px; font-size:13px; }
-  label { display:block; margin:10px 0 2px; font-size:13px; color:var(--dim); }
-  input[type=text], input[type=number], select { font:inherit; padding:6px 8px;
-           border:1px solid var(--line); border-radius:6px; min-width:220px; }
+             margin:8px 0 12px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; }
+  .sortbar button { min-height:36px; padding:5px 12px; font-size:14px; }
+  label { display:block; margin:10px 0 2px; font-size:14px; color:var(--dim); }
+  input[type=text], input[type=number], select, textarea { font:inherit; padding:10px 10px;
+           border:1px solid var(--line); border-radius:8px; min-width:200px; width:100%; }
   table { border-collapse:collapse; width:100%; font-size:14px; }
-  td, th { text-align:left; padding:6px 8px; border-bottom:1px solid #eee; vertical-align:top; }
+  td, th { text-align:left; padding:8px 8px; border-bottom:1px solid #eee; vertical-align:top; }
   .mono { font-variant-numeric: tabular-nums; }
-  details { margin:6px 0; }
+  details { margin:8px 0; }
+  details.card > summary { cursor:pointer; padding:4px 0; }
   summary { cursor:pointer; }
+  summary.fold { font-weight:600; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; list-style:none; }
+  summary.fold::before { content:"▸ "; color:var(--dim); }
+  details[open] > summary.fold::before { content:"▾ "; }
+  /* 폰 — 표를 카드로 (`prereg-35` ③). 열 제목은 data-th 로 각 칸 앞에 붙는다. JS 없음 */
+  @media (max-width: 640px) {
+    body { padding:14px 12px 56px; }
+    table.products, table.products tbody, table.products tr, table.products td { display:block; width:100%; }
+    table.products thead { display:none; }
+    table.products tr { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:10px 0; }
+    table.products td { border:0; padding:4px 0; }
+    table.products td[data-th]::before { content: attr(data-th) " · "; color:var(--dim); font-size:13px; }
+    table.products td.rank { display:none; }
+    .row { flex-direction:column; align-items:stretch; }
+    .grow { min-width:0; }
+  }
 </style>
 </head>
 <body>

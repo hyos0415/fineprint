@@ -372,7 +372,10 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
         # 문장은 뷰 모델이 든다 — 한쪽만 쓰는 낱말을 만들지 않는다 (`0039` 반증 조건 1)
         cur = vm["questions"].get("현재") or {}
         notice = cur.get("빈_제출_안내") or "은행을 하나 이상 골라 주세요"
-    return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state))
+    # 멈춤 (F7 · `prereg-35` ④) — "여기서 멈추고 결과 보기". 답은 그대로 실려 있어 "계속 답하기" 로 돌아올 수 있다. 저장은 없다
+    stop = get("stop") == "1"
+    return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state),
+                                stop=stop, survey_url=SURVEY_URL)
 
 
 # ── R2 스코프 미리 채움 (D8 · 이슈 #73 · `0060` D6 · `prereg-29`)
@@ -385,6 +388,8 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
 #           (3) 빈 상자면 모델을 부르지 않는다 · 서빙이 없으면 한 줄 안내와 함께 폼이 그대로 동작한다
 #           (4) 채운 값은 **보이는 칸**에 들어간다 (A19) — hidden 으로 실어 보내지 않는다
 R2_URL = os.environ.get("R2_URL", R2.DEFAULT_URL)
+# 설문 링크 (교육장 파일럿 · `prereg-34` §C) — 외부 익명 폼. 서버는 설문을 받지 않는다(`0040`). 비면 "진행자가 안내"
+SURVEY_URL = os.environ.get("SURVEY_URL", "")
 PREFILL_DEFAULTS = {"group": "bank", "term": "12"}      # select 는 늘 값이 있다 — 기본값 그대로면 "비어 있다" 로 본다
 PREFILL_EMPTY = "문장이 비어 있어 채운 것이 없습니다 — 아래 칸을 직접 골라 주세요"
 PREFILL_UNAVAILABLE = "지금은 문장으로 채울 수 없습니다 (이 컴퓨터의 모델 서버가 꺼져 있습니다) — 아래 칸을 직접 골라 주세요"

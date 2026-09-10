@@ -85,6 +85,11 @@ def render_start(form: dict | None = None, error: str | None = None,
             readings[k] = C.amount_words(C.parse_amount(raw))
         except SystemExit:
             pass
+    # "더 정하기" 를 펼칠 것인가 (F7 · `prereg-35` ①) — 접힌 칸에 값이 있으면 펼친다. 사용자가 적었든 문장에서 채웠든
+    # **값이 있는 칸은 보여야 한다**(A19). 기본값(정렬 hi · 빈 스냅샷)은 값으로 치지 않는다. 판정은 여기(렌더러 코드)서 하고 템플릿은 플래그만 쓴다
+    folded = ["company", "amount_deposit", "amount_monthly", "snapshot", "resume_code",
+              f"pref_{P.LIST_AXIS}"] + [f"pref_{k}" for k in P.AXES]
+    unfold = any(str(form.get(k) or "").strip() for k in folded) or (form.get("order") or "hi") != "hi"         or any(k in set(prefilled) for k in folded)
     return _env.get_template("start.html").render(
         form=form,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
@@ -94,13 +99,15 @@ def render_start(form: dict | None = None, error: str | None = None,
         기간들=terms,
         채운칸=set(prefilled),
         금액읽기=readings,
+        더_펼침=unfold,
         prefill_notice=prefill_notice,
         prefill_failed=prefill_failed,
     )
 
 
 def render_screen(vm: dict, form: dict, reports: list[dict],
-                  notice: str | None = None, resume_code: str = "") -> str:
+                  notice: str | None = None, resume_code: str = "",
+                  stop: bool = False, survey_url: str = "") -> str:
     """**검사가 부르는 함수.** 뷰 모델 하나가 화면 하나가 된다.
 
     `form` 은 다음 요청에 그대로 실어 보낼 것들이다 — 스냅샷·권역·기간·스코프·선호와
@@ -117,4 +124,8 @@ def render_screen(vm: dict, form: dict, reports: list[dict],
         notice=notice,
         # 이어하기 코드 (D9) — 서버가 만든 문자열. 비면 상자를 안 그린다(검사가 부를 때)
         resume_code=resume_code,
+        # 멈춤 화면 (F7 · `prereg-35` ④) — 질문 카드 대신 요약 카드. 요약 문장은 뷰 모델에 이미 있는 문자열의 배치다.
+        # 설문 링크는 환경변수 — 서버는 설문을 받지 않는다(`0040`). 없으면 템플릿이 "진행자가 안내" 한 줄을 낸다
+        stop=stop,
+        survey_url=survey_url,
     )
