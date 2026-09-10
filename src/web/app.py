@@ -82,7 +82,7 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
     key = (stamp, group, term)
     if key not in _CACHE:
         try:
-            rows, by_pair = AB.load(stamp, group, term)
+            rows, by_pair = AB.load(stamp, group, term, include_no_condition=True)   # 화면은 조건없음 상품도 본다 (#87)
         except SystemExit as e:          # CLI 는 죽지만 서버는 400 으로 답해야 한다
             raise HTTPException(status_code=400, detail=str(e)) from e
         if not rows:

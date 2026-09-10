@@ -62,12 +62,14 @@ def latest_snapshot(group: str) -> str:
     return found[-1]
 
 
-def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
+def load(stamp: str, group: str, term: int, include_no_condition: bool = False) -> tuple[list[dict], dict]:
+    """행과 추출 결과. **화면 경로는 `include_no_condition=True`** — 우대조건 없는 상품도 행으로 낸다(#87 · `prereg-36`).
+    측정 경로(게이트 곡선 · 기관별 · 스코프·선호 조사)는 기본값 False 로 분모가 그대로다."""
     suffix = "" if group == "bank" else f"_{group}"
     llm_path = C.OUT_DIR / f"extract_llm{suffix}_{stamp}.json"
     if not llm_path.exists():
         raise SystemExit(f"추출 결과가 없다: {llm_path.relative_to(C.REPO_ROOT)}")
-    rows, _ = load_pairs(stamp, group)
+    rows, _ = load_pairs(stamp, group, include_no_condition)
     llm, _ = C.unify_types(json.loads(llm_path.read_text(encoding="utf-8")))
     return ([r for r in rows if r["term"] == term],
             {p["pair_id"]: p for p in llm["pairs"]})
@@ -76,6 +78,10 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
 def score_all(rows: list[dict], by_pair: dict, state: dict, tax: dict) -> list[dict]:
     out = []
     for row in rows:
+        if row.get("no_condition"):
+            # 우대조건이 없는 상품 — 항목 0 개로 채점한다. 계산기는 그대로다: 폭 0 이면 확정, 폭이 남으면 계산불가 (`prereg-36` P2)
+            out.append(C.evaluate(row, {"items": [], "cap": None}, state, tax))
+            continue
         got = by_pair.get(row["pair_id"])
         parsed = got["parsed"] if (got and got["schema_ok"]) else None
         out.append(C.evaluate(row, parsed, state, tax))

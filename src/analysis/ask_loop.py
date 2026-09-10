@@ -529,7 +529,7 @@ def run(stamp: str, group: str, term: int, top: int,
     **다음 질문부터** 묻는다. 서버가 무상태인 것과 같은 모양이다 — 답은 사용자(로그)가 들고
     온다(`0040`). 이어받은 로그의 답을 다시 묻지 않는다."""
     tax = C.load_tax()
-    rows_all, by_pair = AB.load(stamp, group, term)
+    rows_all, by_pair = AB.load(stamp, group, term, include_no_condition=True)   # 화면 경로 — 조건없음 상품도 (#87)
     if not rows_all:
         raise SystemExit(f"{term}개월 상품이 없다. --term 을 바꿔본다")
     # 0단계 — 후보 집합을 자른다 (`decisions/0028`). 질문은 이 집합에서만 나온다
