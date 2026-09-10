@@ -286,8 +286,9 @@ def check_prefill(tag: str) -> list[dict]:
 
     bad: list[dict] = []
     marker = "A19검사용원문표지문장"
-    fake = {"group": "savingsbank", "company": "웰컴저축은행,페퍼저축은행", "kinds": "적금", "term": "18",
+    fake = {"group": "savingsbank", "company": "웰컴저축은행,페퍼저축은행", "kinds": "적금", "term": "24",
             "amount_deposit": "30000000", "amount_monthly": "300000"}
+    TERMS = [1, 3, 6, 12, 24, 36]          # 공시의 가입 기간 단위 — 서버는 카탈로그에서 센다. 검사는 고정값으로 본다
     calls: list[str] = []
 
     def caller(t):
@@ -300,7 +301,11 @@ def check_prefill(tag: str) -> list[dict]:
         bad.append(hit(f"빈 상자인데 호출 {len(calls)} · 채운 칸 {filled} · 폼 변경 {out != f0}"))
     # (가)(나)(라) 채움 — 사용자가 적은 은행 칸은 그대로, 나머지는 보이는 칸에
     f1 = {"group": "bank", "term": "12", "company": "우리", "kinds": "", "amount_deposit": "", "amount_monthly": ""}
-    out, filled, notice, failed = APP.prefill_fields(dict(f1), marker, caller)
+    out, filled, notice, failed = APP.prefill_fields(dict(f1), marker, caller, terms_available=TERMS)
+    # 공시에 없는 기간(18)은 채우지 않고 안내한다 — 있는 것처럼 메뉴에 넣어 "없다" 로 끝나게 하지 않는다
+    out18, filled18, notice18, _ = APP.prefill_fields(dict(f1), marker, lambda t: ({**fake, "term": "18"}, 0.0, None), terms_available=TERMS)
+    if "term" in filled18 or out18.get("term") != "12" or "18개월" not in (notice18 or ""):
+        bad.append(hit(f"공시에 없는 18개월을 채웠거나 안내가 없다: {filled18} · {out18.get('term')}"))
     if len(calls) != 1:
         bad.append(hit(f"문장 하나에 호출 {len(calls)}"))
     if out.get("company") != "우리" or "company" in filled:

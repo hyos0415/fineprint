@@ -49,14 +49,14 @@ _env = Environment(
 )
 
 
-TERM_MENU = (6, 12, 24, 36)
+TERM_MENU = (1, 3, 6, 12, 24, 36)     # 공시의 가입 기간 단위 — 서버가 카탈로그에서 실측한 값을 넘기면 그것을 쓴다
 
 
 def render_start(form: dict | None = None, error: str | None = None,
                  snapshots: dict[str, list[str]] | None = None,
                  prefilled: tuple[str, ...] | list[str] | set[str] = (),
                  prefill_notice: str | None = None, prefill_failed: bool = False,
-                 catalog: dict | None = None) -> str:
+                 catalog: dict | None = None, terms: list[int] | None = None) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
@@ -67,14 +67,9 @@ def render_start(form: dict | None = None, error: str | None = None,
     `prefill_notice` 는 채우기 뒤에 한 줄 (성공·실패·빈 상자). 문장 자체는 여기 오지 않는다.
     """
     form = form or {}
-    # 기간 메뉴 — 모델이 낸 기간이 메뉴 밖(예: 18)이면 그 값을 더해 **보이게** 한다. 조용히 12 로 바꾸지 않는다
-    terms = list(TERM_MENU)
-    try:
-        t = int(str(form.get("term", "")).strip() or 0)
-    except ValueError:
-        t = 0
-    if t and t not in terms:
-        terms = sorted(terms + [t])
+    # 기간 메뉴 — **공시에 있는 기간만**. 전에는 모델이 낸 18개월을 메뉴에 더해 고르게 했는데 다음 화면이 "없다" 로 끝났다(사람 검수 2026-09-10).
+    # 없는 기간은 prefill 이 채우지 않고 안내로 말한다. 폼 값이 메뉴 밖이면 12 로 보이되 그 사실은 안내가 말한다
+    terms = list(terms or TERM_MENU)
     # 금액 읽기 — 칸에 값이 있으면 옆에 한글로 (`오백만 원`). 사람 세션에서 `5000000` 을 읽지 못했다(`prereg-29` §7).
     # 판정이 아니라 같은 값을 다른 표기로 한 번 더 보이는 것이다. 못 읽는 값은 그냥 둔다 — 제출 때 서버가 오류로 답한다
     readings: dict[str, str] = {}

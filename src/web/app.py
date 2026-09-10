@@ -87,8 +87,10 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
         except SystemExit as e:          # CLI 는 죽지만 서버는 400 으로 답해야 한다
             raise HTTPException(status_code=400, detail=str(e)) from e
         if not rows:
+            # 어떤 기간이 있는지를 같이 말한다 — 사람 검수: "18개월 적금 아무 은행이나" → "없다" 만 보였다
+            avail = "·".join(str(t) for t in _terms_available())
             raise HTTPException(status_code=400,
-                                detail=f"{term}개월 상품이 없다 (스냅샷 {stamp} · {group})")
+                                detail=f"{term}개월 상품은 공시에 없습니다 — 공시의 가입 기간은 {avail}개월입니다. 가까운 기간을 골라 주세요")
         _CACHE[key] = (rows, by_pair)
     return _CACHE[key]
 
@@ -234,7 +236,7 @@ def start() -> str:
     """폼이다. **자유 입력이 아니다** — 자유 입력(R2)은 `0042` 로 따로 정해 뒀고,
     그때는 로컬 모델이 첫 수신자가 되어야 한다.
     """
-    return RENDER.render_start(snapshots=_snapshot_menu(), catalog=_catalog())
+    return RENDER.render_start(snapshots=_snapshot_menu(), catalog=_catalog(), terms=_terms_available())
 
 
 def _snapshot_menu() -> dict[str, list[str]]:
@@ -243,6 +245,12 @@ def _snapshot_menu() -> dict[str, list[str]]:
 
 
 _CATALOG: dict[str, dict] = {}
+
+
+def _terms_available() -> list[int]:
+    """두 권역에 실제로 있는 가입 기간(개월)의 합집합. 폼 메뉴와 "없다" 안내가 이것을 쓴다. 카탈로그가 비면 공시 단위 기본값."""
+    terms = sorted({t for c in _catalog().values() for t in c.get("기간", [])})
+    return terms or list(RENDER.TERM_MENU)
 
 
 def _catalog() -> dict[str, dict]:
@@ -263,14 +271,18 @@ def _catalog() -> dict[str, dict]:
             continue
         orgs: dict[str, str] = {}                     # 공시 이름 → 표기 이름
         products: dict[str, set] = {"예금": set(), "적금": set()}
+        terms: set[int] = set()
         for r in rows:
             co = r.get("company") or ""
             if co:
                 orgs[co] = C.org_label(co)
             products.setdefault(r["kind"], set()).add((r.get("co_no"), r["code"]))
+            terms.add(int(r["term"]))
         _CATALOG[g] = {"스냅샷": stamp,
                        "기관": sorted(orgs.items(), key=lambda kv: kv[1]),     # [(공시 이름, 표기 이름)]
-                       "예금": len(products["예금"]), "적금": len(products["적금"])}
+                       "예금": len(products["예금"]), "적금": len(products["적금"]),
+                       # 공시에 실제로 있는 가입 기간(개월) — 사람 검수: "18개월 적금" 이 없다고 나왔다. 공시 단위는 1·3·6·12·24·36 이다
+                       "기간": sorted(terms)}
     return _CATALOG
 
 
@@ -308,7 +320,8 @@ async def screen_html(request: Request) -> str:
     try:
         return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu(), catalog=_catalog()),
+        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu(), catalog=_catalog(),
+                                                terms=_terms_available()),
                             status_code=e.status_code)
 
 
@@ -434,7 +447,7 @@ PREFILL_NOTHING = "문장에서 채울 수 있는 칸이 없었습니다 — 아
 
 
 def prefill_fields(f: dict[str, str], text: str,
-                   caller=None) -> tuple[dict[str, str], list[str], str, bool]:
+                   caller=None, terms_available: list[int] | None = None) -> tuple[dict[str, str], list[str], str, bool]:
     """폼 + 문장 → (채워진 폼, 채운 칸 이름, 안내 한 줄, 실패 여부). **문장은 돌려주지 않는다.**
 
     빈 칸만 채운다 — 사용자가 이미 적은 값이 모델 값보다 앞선다 (`prereg-29` §2). select(권역·기간)는 늘 값이
@@ -449,7 +462,13 @@ def prefill_fields(f: dict[str, str], text: str,
     if err:
         busy = "timed out" in err.lower() or "timeout" in err.lower()
         return f, [], (PREFILL_BUSY if busy else PREFILL_UNAVAILABLE), True
-    out, filled = dict(f), []
+    out, filled, extra = dict(f), [], ""
+    # 기간은 **공시에 있는 것만** 채운다 — "18개월" 처럼 없는 기간을 메뉴에 넣어 고르게 하면 다음 화면이 "없다" 로 끝난다(사람 검수 2026-09-10)
+    terms = terms_available or _terms_available()
+    t = values.get("term")
+    if t and t.isdigit() and int(t) not in terms:
+        values = {k: v for k, v in values.items() if k != "term"}
+        extra = f" 문장의 {t}개월은 공시에 없는 기간이라 채우지 않았습니다 — 공시의 가입 기간은 {'·'.join(map(str, terms))}개월입니다."
     for k in R2.PREFILL_FIELDS:
         v = values.get(k)
         if not v:
@@ -460,10 +479,10 @@ def prefill_fields(f: dict[str, str], text: str,
         out[k] = v
         filled.append(k)
     if not filled:
-        return out, [], PREFILL_NOTHING, False
+        return out, [], PREFILL_NOTHING + extra, False
     labels = {"group": "권역", "company": "은행", "kinds": "예금/적금", "term": "기간"}
     notice = ("문장에서 " + " · ".join(labels[k] for k in filled) + " 을(를) 채웠습니다 — "
-              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 금액은 직접 적어 주세요. 문장은 서버에 남지 않았습니다")
+              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 금액은 직접 적어 주세요. 문장은 서버에 남지 않았습니다" + extra)
     return out, filled, notice, False
 
 
@@ -481,7 +500,8 @@ async def prefill_html(request: Request) -> str:
     form, filled, notice, failed = await run_in_threadpool(prefill_fields, f, text)
     del text
     return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
-                               prefill_notice=notice, prefill_failed=failed, catalog=_catalog())
+                               prefill_notice=notice, prefill_failed=failed, catalog=_catalog(),
+                               terms=_terms_available())
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다
