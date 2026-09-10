@@ -1,5 +1,7 @@
 {# 0단계 — 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
-   조건 답은 여기서 안 받는다. 그건 질문 루프의 일이다 (`0016`·`0024` P5). #}
+   조건 답은 여기서 안 받는다. 그건 질문 루프의 일이다 (`0016`·`0024` P5).
+   F7(`prereg-35` ①) — 보이는 것은 내 상황 · 권역 · 예금/적금 · 기간 · 목록 보기. 나머지는 "더 정하기" 로 접는다.
+   접힌 칸에 값이 있으면 서버(render_start)가 `더_펼침` 을 켜서 펼친 채로 낸다 — 채운 값은 보이는 칸에(A19). #}
 {% extends "base.html" %}
 {% block title %}FINeprint — 시작{% endblock %}
 {% block body %}
@@ -7,160 +9,177 @@
 <h1>내 상황에 맞는 예금·적금 찾기</h1>
 <p class="notice">광고에 붙은 최고금리는 조건을 다 채웠을 때의 값입니다.
   여기서는 <b>내가 실제로 받을 범위</b>를 보여주고, 못 채운 조건은 이유와 함께 냅니다.</p>
-
-{% if error %}
-<p class="card warn"><b>{{ error }}</b></p>
-{% endif %}
+{# 참가자 안내 — 저장하지 않는다(`0040`) · 실제 계좌·급여는 넣지 않는다 (교육장 파일럿 · `prereg-34`) #}
+<p class="notice">입력한 내용은 <b>서버에 저장되지 않습니다.</b> 실제 계좌번호·급여액은 넣지 마세요. 답하기 싫은 질문은 "모름"으로 넘길 수 있습니다.</p>
 
 <form method="post" action="/screen">
   {# 글자 칸에서 Enter 를 치면 폼의 **첫 번째** 제출 버튼이 눌린다. 그게 "칸 채우기" 가 되면 모델이 뜻밖에 불린다 —
      보이지 않는 "목록 보기" 를 맨 앞에 두어 Enter 는 지금처럼 목록으로 가게 한다 (JS 없음) #}
   <button type="submit" style="display:none" tabindex="-1" aria-hidden="true">목록 보기</button>
-  {# 내 상황 — 자연어 한 문장으로 아래 다섯 칸을 **미리 채운다** (R2 · `0060` D6 · `prereg-29`).
+  {% if error %}
+  <p class="card warn"><b>{{ error }}</b>
+    {% if 가까운_기간 %}
+    {# 없는 기간을 대신 고르지 않는다 — 가까운 기간 버튼을 주고 사용자가 누른다. 버튼의 term 값이 select 값 뒤에 실려 이긴다(같은 이름 · 마지막 값) #}
+    <br><span class="notice">가까운 기간으로 보기 —</span>
+    {% for t in 가까운_기간 %}<button type="submit" name="term" value="{{ t }}" class="quiet">{{ t }}개월로 보기</button> {% endfor %}
+    {% endif %}
+  </p>
+  {% endif %}
+
+  {# 내 상황 — 자연어 한 문장으로 아래 칸을 **미리 채운다** (R2 · `0060` D6 · `prereg-29`).
      같은 폼 안의 두 번째 버튼(formaction=/prefill · JS 없음)이라 사용자가 이미 적은 칸이 그대로 함께 간다 — 서버는 빈 칸만 채운다.
-     모델은 채우기만 하고 판정하지 않는다 — 값은 아래 **보이는 칸**에 들어가고 사용자가 고쳐서 낸다(A19).
-     문장은 서버가 응답을 만든 뒤 버린다 · 이 상자는 되돌려 채우지 않는다. 비우고 "목록 보기" 를 누르면 지금과 같다. #}
+     값은 아래 **보이는 칸**에 들어가고 사용자가 고쳐서 낸다(A19). 문장은 서버가 응답을 만든 뒤 버린다 · 이 상자는 되돌려 채우지 않는다. #}
   <h2>내 상황을 한 문장으로 <span class="notice">(선택 — 아래 칸을 대신 채워 줍니다)</span></h2>
-  <div>
-    <textarea id="situation" name="situation" rows="2" style="width:100%; font:inherit"
-              placeholder="예: 우리은행 적금 1년짜리 보고 싶어"></textarea>
-    <span class="notice">문장은 이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간</b>만 채웁니다.
-      금액과 조건 답은 채우지 않습니다 — 금액은 아래에 직접 적어 주세요. 문장은 서버에 남지 않습니다.</span>
-  </div>
-  <p><button type="submit" formaction="/prefill">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
+  <textarea id="situation" name="situation" rows="2"
+            placeholder="예: 1년짜리 적금 아무 은행이나 · 매달 20만원 정도"></textarea>
+  <p class="notice">이 컴퓨터 안의 모델이 읽고 <b>권역 · 은행 · 예금/적금 · 기간</b>만 채웁니다. 금액과 조건 답은 채우지 않습니다. 문장은 서버에 남지 않습니다.</p>
+  <p><button type="submit" formaction="/prefill" class="quiet">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
   {% if prefill_notice %}
   <p class="card {% if prefill_failed %}warn{% endif %}"><b>{{ prefill_notice }}</b>
-    {# 새로고침은 마지막 요청(칸 채우기)을 다시 보낸다 — 채운 표시가 그대로 남고 모델도 한 번 더 불린다.
-       빈 폼으로 가는 길은 이 링크다 (GET / · 아무것도 실어 보내지 않는다) #}
+    {% if 가까운_기간 %}
+    <br><span class="notice">{{ 없는_기간 }}개월 대신 가까운 기간으로 보기 —</span>
+    {% for t in 가까운_기간 %}<button type="submit" name="term" value="{{ t }}" class="quiet">{{ t }}개월로 보기</button> {% endfor %}
+    {% endif %}
     <br><a href="/">처음부터 — 칸을 모두 비운 새 화면으로</a></p>
   {% endif %}
 
-  <h2>어디서 찾을까요</h2>
+  {# 무엇이 있나 — 사람 검수: "무슨 은행이 있는지 모른다 · 뭘 검색해야 할지 모른다". 몰라도 된다는 것과 실제 있는 것을 첫 화면이 말한다.
+     숫자는 서버가 원천에서 센 것(app._catalog)이고 템플릿은 꽂기만 한다 #}
+  <h2>어디서 찾을까요 <span class="notice">— 몰라도 됩니다. 권역과 기간만 고르면 전부 보여드립니다</span></h2>
+  {% if 카탈로그 %}
+  <p class="notice">지금 있는 것 —
+    {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 카탈로그.get(g) %}<b>{{ label }} {{ 카탈로그[g]['기관']|length }}곳</b> · 예금 {{ 카탈로그[g]['예금'] }}개 · 적금 {{ 카탈로그[g]['적금'] }}개{% if not loop.last %} &nbsp;|&nbsp; {% endif %}{% endif %}{% endfor %}
+    <span class="notice">(금융감독원 공시 기준)</span></p>
+  {% endif %}
   <div class="row">
-    <div>
+    <div class="grow">
       <label for="group">권역{% if "group" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <select id="group" name="group">
         <option value="bank" {% if form.get('group','bank') == 'bank' %}selected{% endif %}>은행</option>
         <option value="savingsbank" {% if form.get('group') == 'savingsbank' %}selected{% endif %}>저축은행</option>
       </select>
     </div>
-    <div>
-      <label for="term">가입 기간(개월){% if "term" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
+    <div class="grow">
+      <label for="kinds">예금 / 적금{% if "kinds" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
+      {# 자유 입력이던 칸을 select 로 — 값은 서버가 받던 문자열 그대로(빈 값 · 예금 · 적금) #}
+      <select id="kinds" name="kinds">
+        <option value="" {% if not form.get('kinds') %}selected{% endif %}>둘 다</option>
+        <option value="예금" {% if form.get('kinds') == '예금' %}selected{% endif %}>예금 — 목돈을 한 번에</option>
+        <option value="적금" {% if form.get('kinds') == '적금' %}selected{% endif %}>적금 — 매달 넣기</option>
+      </select>
+    </div>
+    <div class="grow">
+      <label for="term">가입 기간{% if "term" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
       <select id="term" name="term">
         {% for t in 기간들 %}
         <option value="{{ t }}" {% if form.get('term', 12)|int == t %}selected{% endif %}>{{ t }}개월</option>
         {% endfor %}
       </select>
     </div>
-    <div>
-      <label for="snapshot">공시 스냅샷 (선택)</label>
-      {# 비우면 서버가 **권역별 최신**을 고른다 (이슈 #52). 옛 폼은 권역과 무관하게
-         20260826 을 박아 두어 저축은행이 첫 화면에서 막혔다. #}
-      <input id="snapshot" type="text" name="snapshot" value="{{ form.get('snapshot', '') }}"
-             placeholder="비우면 최신">
-      {% if 스냅샷 %}
-      <span class="notice">최신:
-        {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 스냅샷.get(g) %}{{ label }} {{ 스냅샷[g][-1] }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}</span>
-      {% endif %}
-    </div>
   </div>
 
-  {# 정렬 — `0017` 이 남겨 둔 `--sort lo` 를 화면에 낸다 (`prereg-14` §8 A안).
-     조건을 못 채우는 사용자는 최대순 맨 위에서 자기가 받을 상품을 못 본다 —
-     무작위 200명 중 19.5%가 그 상태였다. 화면 안에서 언제든 바꿀 수 있다. #}
-  <div class="row">
-    <div class="grow">
-      <label for="order">무엇을 먼저 보여줄까요</label>
-      <select id="order" name="order">
-        <option value="hi" {% if form.get('order', 'hi') == 'hi' %}selected{% endif %}>
-          조건을 다 채웠을 때 받을 수 있는 금리 순
-        </option>
-        <option value="lo" {% if form.get('order') == 'lo' %}selected{% endif %}>
-          지금 확실히 받는 금리 순 — 조건을 채우기 어렵다면 이쪽
-        </option>
-      </select>
-    </div>
-  </div>
+  <p style="margin-top:18px"><button class="primary" type="submit">목록 보기</button></p>
 
-  <div class="row">
-    <div class="grow">
-      <label for="company">은행 좁히기 (선택 · 쉼표로 여럿){% if "company" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
-      <input id="company" type="text" name="company" value="{{ form.get('company', '') }}"
-             placeholder="예: 우리,농협">
-    </div>
-    <div class="grow">
-      <label for="kinds">예금 / 적금 (선택){% if "kinds" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
-      <input id="kinds" type="text" name="kinds" value="{{ form.get('kinds', '') }}"
-             placeholder="예금 또는 적금">
-    </div>
-  </div>
-  <p class="notice">좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
+  {# 더 정하기 — 기본값이 없는 칸들. 접혀 있어도 결과가 안 바뀐다. 값이 있으면 서버가 펼친다(더_펼침) #}
+  <details {% if 더_펼침 %}open{% endif %}>
+    <summary class="fold">더 정하기 <span class="notice">— 은행 좁히기 · 금액 · 무엇을 중요하게 보는지 · 정렬 · 이어하기</span></summary>
 
-  {# 가입 금액 (E4 · `prereg-25`) — 있으면 상품마다 예상 이자(세전·세후 · 원)를 낸다.
-     금리·순서에는 들어가지 않는다. 판정(넘음·경계)은 서버가 하고 여기는 받기만 한다 #}
-  <h2>얼마를 넣으실 건가요 <span class="notice">(선택 — 예상 이자를 원 단위로 보여줍니다)</span></h2>
-  <div class="row">
-    <div class="grow">
-      <label for="amount_deposit">예금 — 한 번에 넣을 금액{% if "amount_deposit" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
-      <input id="amount_deposit" type="text" name="amount_deposit" value="{{ form.get('amount_deposit', '') }}"
-             placeholder="예: 5천만원 또는 50000000">
-      {% if 금액읽기.get('amount_deposit') %}<span class="notice">= <b>{{ 금액읽기['amount_deposit'] }}</b></span>{% endif %}
-    </div>
-    <div class="grow">
-      <label for="amount_monthly">적금 — 매달 넣을 금액{% if "amount_monthly" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</label>
-      <input id="amount_monthly" type="text" name="amount_monthly" value="{{ form.get('amount_monthly', '') }}"
-             placeholder="예: 100만원 또는 1000000">
-      {% if 금액읽기.get('amount_monthly') %}<span class="notice">= <b>{{ 금액읽기['amount_monthly'] }}</b></span>{% endif %}
-    </div>
-  </div>
-  <p class="notice">금액은 <b>예상 이자를 보여주는 데만</b> 씁니다 — 금리와 순서는 바뀌지 않습니다.</p>
-  {# 이 화면의 **유일한 스크립트** — 금액 칸에 치는 동안 쉼표만 넣는다 (`0061` · 사람 결정 2026-09-09 · "숫자를 읽을 수 있게").
-     계산·판정·표시 결정을 하지 않는다. 서버는 쉼표가 있는 값을 그대로 받는다(`parse_amount`). 스크립트가 꺼져 있어도 폼은 그대로 동작한다.
-     한글 읽기("오천만 원")는 서버가 붙인다 — 같은 읽기 코드를 JS 로 한 벌 더 만들지 않는다(두 벌이면 다른 말을 한다). #}
-  <script>
-    for (const el of document.querySelectorAll('input[name="amount_deposit"], input[name="amount_monthly"]')) {
-      el.addEventListener('input', () => {
-        const digits = el.value.replace(/[^0-9]/g, '');
-        if (digits === '' || /[^0-9,]/.test(el.value)) return;   // "5천만원" 처럼 단위를 적는 중이면 건드리지 않는다
-        el.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-      });
-      el.dispatchEvent(new Event('input'));   // 문장에서 채워 온 값(50000000)도 처음부터 쉼표로 보인다
-    }
-  </script>
-
-  <h2>무엇을 중요하게 보시나요 <span class="notice">(선택 — 답한 것만 순서에 반영됩니다)</span></h2>
-  <p class="notice">여기 답한 것은 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
-  {% for key, axis in 축.items() %}
-  <div>
-    <label for="pref_{{ key }}">{{ axis['question'] }}</label>
-    <select id="pref_{{ key }}" name="pref_{{ key }}">
-      <option value="">— 답 안 함 —</option>
-      {% for choice, weight in axis['choices'].items() %}
-      <option value="{{ choice }}" {% if form.get('pref_' ~ key) == choice %}selected{% endif %}>
-        {{ choice }}{% if weight is number and weight != 0 %} ({{ '%+.2f'|format(weight) }}%p){% endif %}{% if weight is not number %} ({{ weight }}){% endif %}
-      </option>
+    <h3>은행 좁히기 (선택){% if "company" in 채운칸 %} <b class="warn">· 문장에서 채움 — 확인하세요</b>{% endif %}</h3>
+    <p class="notice">고르지 않으면 전부 봅니다. 좁히면 질문 수가 줄지만 <b>밖에 더 좋은 상품이 있으면 그것도 같이 보여줍니다</b>.</p>
+    {% if 카탈로그 %}
+    {# 이름을 치는 칸이 아니라 **있는 것을 고르는** 목록 — 보이는 것은 표기 이름, 보내는 것은 공시 이름(F5). 고른 것이 있는 권역은 펼쳐서 낸다 #}
+    {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 카탈로그.get(g) %}
+    <details {% if g in 펼칠_권역 %}open{% endif %}>
+      <summary class="notice">{{ label }} {{ 카탈로그[g]['기관']|length }}곳 보기</summary>
+      {% for co, shown in 카탈로그[g]['기관'] %}
+      <label class="pick"><input type="checkbox" name="company_pick" value="{{ co }}" {% if co in 고른_은행 %}checked{% endif %}> {{ shown }}</label>
       {% endfor %}
-    </select>
-    <span class="notice">{{ axis['applies'] }}</span>
-  </div>
-  {% endfor %}
-  <div>
-    <label for="pref_list">{{ 목록축 }} (선택 · 쉼표나 띄어쓰기로 여럿)</label>
-    <input id="pref_list" type="text" name="pref_{{ 목록축 }}" value="{{ form.get('pref_' ~ 목록축, '') }}"
-           placeholder="예: 우리, 농협">
-  </div>
+    </details>
+    {% endif %}{% endfor %}
+    {% else %}
+    <input id="company" type="text" name="company" value="{{ form.get('company', '') }}" placeholder="예: 우리,농협">
+    {% endif %}
 
-  {# 이어하기 (D9 · `prereg-24`) — 답은 서버에 남지 않으므로 사용자가 든 코드로 돌아온다.
-     코드가 있으면 위의 칸들은 코드 안의 값으로 덮인다 (서버가 그렇게 한다 · 템플릿은 안 판정) #}
-  <h2>이어서 답하기 <span class="notice">(선택)</span></h2>
-  <div>
+    {# 가입 금액 (E4 · `prereg-25`) — 있으면 상품마다 예상 이자(세전·세후 · 원)를 낸다. 금리·순서에는 들어가지 않는다 #}
+    <h3>얼마를 넣으실 건가요 (선택 — 예상 이자를 원 단위로 보여줍니다)</h3>
+    <div class="row">
+      <div class="grow">
+        <label for="amount_deposit">예금 — 한 번에 넣을 금액</label>
+        <input id="amount_deposit" type="text" name="amount_deposit" value="{{ form.get('amount_deposit', '') }}"
+               placeholder="예: 5천만원 또는 50000000">
+        {% if 금액읽기.get('amount_deposit') %}<span class="notice">= <b>{{ 금액읽기['amount_deposit'] }}</b></span>{% endif %}
+      </div>
+      <div class="grow">
+        <label for="amount_monthly">적금 — 매달 넣을 금액</label>
+        <input id="amount_monthly" type="text" name="amount_monthly" value="{{ form.get('amount_monthly', '') }}"
+               placeholder="예: 100만원 또는 1000000">
+        {% if 금액읽기.get('amount_monthly') %}<span class="notice">= <b>{{ 금액읽기['amount_monthly'] }}</b></span>{% endif %}
+      </div>
+    </div>
+    <p class="notice">금액은 <b>예상 이자를 보여주는 데만</b> 씁니다 — 금리와 순서는 바뀌지 않습니다.</p>
+    {# 이 화면의 **유일한 스크립트** — 금액 칸에 치는 동안 쉼표만 넣는다 (`0061`). 계산·판정 없음. 한글 읽기는 서버가 붙인다 #}
+    <script>
+      for (const el of document.querySelectorAll('input[name="amount_deposit"], input[name="amount_monthly"]')) {
+        el.addEventListener('input', () => {
+          const digits = el.value.replace(/[^0-9]/g, '');
+          if (digits === '' || /[^0-9,]/.test(el.value)) return;
+          el.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        });
+        el.dispatchEvent(new Event('input'));
+      }
+    </script>
+
+    <h3>무엇을 중요하게 보시나요 (선택 — 답한 것만 순서에 반영됩니다)</h3>
+    <p class="notice">여기 답한 것은 <b>순서만</b> 바꿉니다. 금리 숫자에는 들어가지 않습니다.</p>
+    {% for key, axis in 축.items() %}
+    <div>
+      <label for="pref_{{ key }}">{{ axis['question'] }}</label>
+      <select id="pref_{{ key }}" name="pref_{{ key }}">
+        <option value="">— 답 안 함 —</option>
+        {% for choice, weight in axis['choices'].items() %}
+        <option value="{{ choice }}" {% if form.get('pref_' ~ key) == choice %}selected{% endif %}>
+          {{ choice }}{% if weight is number and weight != 0 %} ({{ '%+.2f'|format(weight) }}%p){% endif %}{% if weight is not number %} ({{ weight }}){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <span class="notice">{{ axis['applies'] }}</span>
+    </div>
+    {% endfor %}
+    <div>
+      <label for="pref_list">{{ 목록축 }} (선택 · 쉼표나 띄어쓰기로 여럿)</label>
+      <input id="pref_list" type="text" name="pref_{{ 목록축 }}" value="{{ form.get('pref_' ~ 목록축, '') }}"
+             placeholder="예: 우리, 농협">
+    </div>
+
+    <h3>순서와 자료</h3>
+    <div class="row">
+      <div class="grow">
+        {# 정렬 — `0017` 이 남겨 둔 `--sort lo` 를 화면에 낸다 (`prereg-14` §8 A안). 화면 안에서 언제든 바꿀 수 있다 #}
+        <label for="order">무엇을 먼저 보여줄까요</label>
+        <select id="order" name="order">
+          <option value="hi" {% if form.get('order', 'hi') == 'hi' %}selected{% endif %}>조건을 다 채웠을 때 받을 수 있는 금리 순</option>
+          <option value="lo" {% if form.get('order') == 'lo' %}selected{% endif %}>지금 확실히 받는 금리 순 — 조건을 채우기 어렵다면 이쪽</option>
+        </select>
+      </div>
+      <div class="grow">
+        <label for="snapshot">공시 스냅샷 (선택)</label>
+        {# 비우면 서버가 **권역별 최신**을 고른다 (이슈 #52) #}
+        <input id="snapshot" type="text" name="snapshot" value="{{ form.get('snapshot', '') }}" placeholder="비우면 최신">
+        {% if 스냅샷 %}
+        <span class="notice">최신:
+          {% for g, label in [('bank', '은행'), ('savingsbank', '저축은행')] %}{% if 스냅샷.get(g) %}{{ label }} {{ 스냅샷[g][-1] }}{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    {# 이어하기 (D9 · `prereg-24`) — 코드가 있으면 위의 칸들은 코드 안의 값으로 덮인다 (서버가 그렇게 한다) #}
+    <h3>이어서 답하기</h3>
     <label for="resume_code">이어하기 코드 — 전에 결과 화면 아래에서 복사한 것</label>
-    <textarea id="resume_code" name="resume_code" rows="3" style="width:100%; font:12px/1.4 monospace"
+    <textarea id="resume_code" name="resume_code" rows="2" style="font:12px/1.4 monospace"
               placeholder='{"snapshot": ..., "state": {...}}'>{{ form.get('resume_code', '') }}</textarea>
     <span class="notice">붙여 넣으면 위에서 고른 것은 무시되고 그때의 화면이 그대로 이어집니다.</span>
-  </div>
-
-  <p style="margin-top:22px"><button class="primary" type="submit">목록 보기</button></p>
+    <p style="margin-top:14px"><button class="primary" type="submit">목록 보기</button></p>
+  </details>
 </form>
 
 <p class="notice">이 화면은 금융감독원 공시를 계산한 결과입니다 —
