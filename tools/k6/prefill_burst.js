@@ -29,6 +29,16 @@ const SENTENCES = [
   '적금 짧은 기간으로 아무 은행이나',
   '부산은행이랑 경남은행 예금 비교',
   '케이뱅크 적금 1년 반',
+  '수협은행 예금 6개월 생각 중',
+  '광주은행 적금 3년으로 길게 가고 싶어',
+  '전북은행 예금 1년',
+  '아이엠뱅크 적금 2년 넣을까 고민',
+  '기업은행 예금 24개월',
+  'SC제일은행 정기예금 1년짜리 있나',
+  '저축은행 적금 1년 아무데나',
+  '토스뱅크 예금 6개월',
+  '국민은행 적금 36개월 장기로',
+  '신한은행 예금 12개월로 볼래',
 ];
 
 export const options = {
@@ -64,6 +74,7 @@ export function burst() {
   const body = `group=bank&term=12&snapshot=&order=hi&company=&kinds=&amount_deposit=&amount_monthly=&situation=${encodeURIComponent(s)}`;
   const r = http.post(`${BASE}/prefill`, body, { headers: FORM, timeout: '90s', tags: { kind: 'prefill' } });
   prefillMs.add(r.timings.duration);
-  if (r.body && r.body.includes('채울 수 없습니다')) prefillTimeout.add(1);
+  // 꺼짐(PREFILL_UNAVAILABLE) 과 붐빔(PREFILL_BUSY) 둘 다 실패로 센다 — 20명 시험에서 붐빔 문구를 놓친 뒤 고쳤다
+  if (r.body && (r.body.includes('채울 수 없습니다') || r.body.includes('채우지 못했습니다'))) prefillTimeout.add(1);
   if (r.body && r.body.includes('문장에서 채움')) prefillFilled.add(1);
 }
