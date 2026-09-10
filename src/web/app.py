@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -387,6 +388,8 @@ R2_URL = os.environ.get("R2_URL", R2.DEFAULT_URL)
 PREFILL_DEFAULTS = {"group": "bank", "term": "12"}      # select 는 늘 값이 있다 — 기본값 그대로면 "비어 있다" 로 본다
 PREFILL_EMPTY = "문장이 비어 있어 채운 것이 없습니다 — 아래 칸을 직접 골라 주세요"
 PREFILL_UNAVAILABLE = "지금은 문장으로 채울 수 없습니다 (이 컴퓨터의 모델 서버가 꺼져 있습니다) — 아래 칸을 직접 골라 주세요"
+# 붐빔과 꺼짐은 다르다 (`prereg-34` §A P5) — 시간 초과는 여러 명이 같은 순간에 눌러 대기열이 길어진 것이다
+PREFILL_BUSY = "지금 여러 명이 함께 쓰고 있어 문장으로 채우지 못했습니다 — 잠시 뒤 다시 누르거나 아래 칸을 직접 골라 주세요"
 PREFILL_NOTHING = "문장에서 채울 수 있는 칸이 없었습니다 — 아래 칸을 직접 골라 주세요"
 
 
@@ -404,7 +407,8 @@ def prefill_fields(f: dict[str, str], text: str,
     caller = caller or (lambda t: R2.prefill(t, R2_URL))
     values, _secs, err = caller(text)
     if err:
-        return f, [], PREFILL_UNAVAILABLE, True
+        busy = "timed out" in err.lower() or "timeout" in err.lower()
+        return f, [], (PREFILL_BUSY if busy else PREFILL_UNAVAILABLE), True
     out, filled = dict(f), []
     for k in R2.PREFILL_FIELDS:
         v = values.get(k)
@@ -431,7 +435,9 @@ async def prefill_html(request: Request) -> str:
     except HTTPException as e:
         return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu()), status_code=e.status_code)
     text = f.pop("situation", "")          # 폼 dict 에서 뺀다 — 템플릿에도, 다음 hidden 에도 가지 않는다
-    form, filled, notice, failed = prefill_fields(f, text)
+    # **스레드풀로 보낸다** (`prereg-34` §A). 모델 호출은 동기 urllib 로 3~30초를 기다리는데, async 핸들러 안에서 그대로 부르면
+    # 이벤트 루프가 서서 **다른 사람의 "목록 보기" 까지 멈춘다** — 부하 시험 ① 에서 /screen p95 가 13 ms → 40 초였다
+    form, filled, notice, failed = await run_in_threadpool(prefill_fields, f, text)
     del text
     return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
                                prefill_notice=notice, prefill_failed=failed)
