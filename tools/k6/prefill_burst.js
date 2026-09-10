@@ -10,6 +10,7 @@ import { Trend, Counter } from 'k6/metrics';
 
 const BASE = __ENV.BASE || 'http://127.0.0.1:8000';
 const BURST_AT = 20; // s
+const BURST_VUS = Number(__ENV.BURST_VUS || 10);   // 같은 순간에 누르는 사람 수 (prereg-34 §A5 · 15)
 
 const screenBefore = new Trend('screen_before_ms', true);
 const screenDuring = new Trend('screen_during_ms', true);
@@ -34,13 +35,13 @@ export const options = {
   scenarios: {
     browse: {
       executor: 'constant-arrival-rate',
-      rate: 5, timeUnit: '1s', duration: '70s',
+      rate: 5, timeUnit: '1s', duration: '90s',
       preAllocatedVUs: 10, maxVUs: 30,
       exec: 'browse',
     },
     burst: {
       executor: 'per-vu-iterations',
-      vus: 10, iterations: 1, startTime: `${BURST_AT}s`, maxDuration: '120s',
+      vus: BURST_VUS, iterations: 1, startTime: `${BURST_AT}s`, maxDuration: '180s',
       exec: 'burst',
     },
   },
