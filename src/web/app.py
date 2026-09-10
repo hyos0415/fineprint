@@ -321,7 +321,7 @@ async def screen_html(request: Request) -> str:
         return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
         return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu(), catalog=_catalog(),
-                                                terms=_terms_available()),
+                                                terms=_terms_available(), requested_term=f.get("term")),
                             status_code=e.status_code)
 
 
@@ -469,6 +469,7 @@ def prefill_fields(f: dict[str, str], text: str,
     if t and t.isdigit() and int(t) not in terms:
         values = {k: v for k, v in values.items() if k != "term"}
         extra = f" 문장의 {t}개월은 공시에 없는 기간이라 채우지 않았습니다 — 공시의 가입 기간은 {'·'.join(map(str, terms))}개월입니다."
+        out["_requested_term"] = t               # 템플릿이 가까운 기간 버튼을 그리게 — 화면 값은 아니다(prefill_html 이 뺀다)
     for k in R2.PREFILL_FIELDS:
         v = values.get(k)
         if not v:
@@ -499,9 +500,10 @@ async def prefill_html(request: Request) -> str:
     # 이벤트 루프가 서서 **다른 사람의 "목록 보기" 까지 멈춘다** — 부하 시험 ① 에서 /screen p95 가 13 ms → 40 초였다
     form, filled, notice, failed = await run_in_threadpool(prefill_fields, f, text)
     del text
+    requested = form.pop("_requested_term", None)     # 공시에 없는 기간을 문장이 말했으면 가까운 기간 버튼을 준다
     return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
                                prefill_notice=notice, prefill_failed=failed, catalog=_catalog(),
-                               terms=_terms_available())
+                               terms=_terms_available(), requested_term=requested)
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다

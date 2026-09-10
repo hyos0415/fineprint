@@ -56,7 +56,8 @@ def render_start(form: dict | None = None, error: str | None = None,
                  snapshots: dict[str, list[str]] | None = None,
                  prefilled: tuple[str, ...] | list[str] | set[str] = (),
                  prefill_notice: str | None = None, prefill_failed: bool = False,
-                 catalog: dict | None = None, terms: list[int] | None = None) -> str:
+                 catalog: dict | None = None, terms: list[int] | None = None,
+                 requested_term: int | str | None = None) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
@@ -70,6 +71,17 @@ def render_start(form: dict | None = None, error: str | None = None,
     # 기간 메뉴 — **공시에 있는 기간만**. 전에는 모델이 낸 18개월을 메뉴에 더해 고르게 했는데 다음 화면이 "없다" 로 끝났다(사람 검수 2026-09-10).
     # 없는 기간은 prefill 이 채우지 않고 안내로 말한다. 폼 값이 메뉴 밖이면 12 로 보이되 그 사실은 안내가 말한다
     terms = list(terms or TERM_MENU)
+    # 요청한 기간이 공시에 없으면 **가까운 기간을 고르게 한다** — 대신 골라 주지 않는다(사람 결정 2026-09-10 · "가까운 상품을 보여주는 게 맞을 것 같다").
+    # 아래로 가장 가까운 것과 위로 가장 가까운 것 둘(18 → 12·24 · 9 → 6·12 · 48 → 36). 버튼은 폼 안에서 term 값을 실어 보낸다 — 선택은 사용자가 한다
+    nearby: list[int] = []
+    try:
+        rt = int(str(requested_term).strip()) if requested_term not in (None, "") else None
+    except ValueError:
+        rt = None
+    if rt is not None and rt not in terms:
+        lower = [t for t in terms if t < rt]
+        upper = [t for t in terms if t > rt]
+        nearby = ([max(lower)] if lower else []) + ([min(upper)] if upper else [])
     # 금액 읽기 — 칸에 값이 있으면 옆에 한글로 (`오백만 원`). 사람 세션에서 `5000000` 을 읽지 못했다(`prereg-29` §7).
     # 판정이 아니라 같은 값을 다른 표기로 한 번 더 보이는 것이다. 못 읽는 값은 그냥 둔다 — 제출 때 서버가 오류로 답한다
     readings: dict[str, str] = {}
@@ -93,6 +105,8 @@ def render_start(form: dict | None = None, error: str | None = None,
     return _env.get_template("start.html").render(
         form=form,
         카탈로그=catalog,
+        없는_기간=rt if nearby else None,
+        가까운_기간=nearby,
         고른_은행=picked,
         펼칠_권역=open_groups,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)

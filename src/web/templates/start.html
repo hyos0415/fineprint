@@ -12,14 +12,19 @@
 {# 참가자 안내 — 저장하지 않는다(`0040`) · 실제 계좌·급여는 넣지 않는다 (교육장 파일럿 · `prereg-34`) #}
 <p class="notice">입력한 내용은 <b>서버에 저장되지 않습니다.</b> 실제 계좌번호·급여액은 넣지 마세요. 답하기 싫은 질문은 "모름"으로 넘길 수 있습니다.</p>
 
-{% if error %}
-<p class="card warn"><b>{{ error }}</b></p>
-{% endif %}
-
 <form method="post" action="/screen">
   {# 글자 칸에서 Enter 를 치면 폼의 **첫 번째** 제출 버튼이 눌린다. 그게 "칸 채우기" 가 되면 모델이 뜻밖에 불린다 —
      보이지 않는 "목록 보기" 를 맨 앞에 두어 Enter 는 지금처럼 목록으로 가게 한다 (JS 없음) #}
   <button type="submit" style="display:none" tabindex="-1" aria-hidden="true">목록 보기</button>
+  {% if error %}
+  <p class="card warn"><b>{{ error }}</b>
+    {% if 가까운_기간 %}
+    {# 없는 기간을 대신 고르지 않는다 — 가까운 기간 버튼을 주고 사용자가 누른다. 버튼의 term 값이 select 값 뒤에 실려 이긴다(같은 이름 · 마지막 값) #}
+    <br><span class="notice">가까운 기간으로 보기 —</span>
+    {% for t in 가까운_기간 %}<button type="submit" name="term" value="{{ t }}" class="quiet">{{ t }}개월로 보기</button> {% endfor %}
+    {% endif %}
+  </p>
+  {% endif %}
 
   {# 내 상황 — 자연어 한 문장으로 아래 칸을 **미리 채운다** (R2 · `0060` D6 · `prereg-29`).
      같은 폼 안의 두 번째 버튼(formaction=/prefill · JS 없음)이라 사용자가 이미 적은 칸이 그대로 함께 간다 — 서버는 빈 칸만 채운다.
@@ -31,6 +36,10 @@
   <p><button type="submit" formaction="/prefill" class="quiet">칸 채우기</button> <span class="notice">몇 초 걸립니다 · 이미 적은 칸은 그대로 둡니다</span></p>
   {% if prefill_notice %}
   <p class="card {% if prefill_failed %}warn{% endif %}"><b>{{ prefill_notice }}</b>
+    {% if 가까운_기간 %}
+    <br><span class="notice">{{ 없는_기간 }}개월 대신 가까운 기간으로 보기 —</span>
+    {% for t in 가까운_기간 %}<button type="submit" name="term" value="{{ t }}" class="quiet">{{ t }}개월로 보기</button> {% endfor %}
+    {% endif %}
     <br><a href="/">처음부터 — 칸을 모두 비운 새 화면으로</a></p>
   {% endif %}
 
