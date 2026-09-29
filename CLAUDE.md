@@ -142,3 +142,42 @@ Windows 11 + RTX 4070 Laptop 8GB → WSL2 → Docker Desktop → vLLM(공식 이
 
 임시 스크립트·중간 산출물은 리포지토리에 커밋하지 않는다. `notes/`는 `.gitignore`에 있다
 (개인 메모용).
+
+## 스택 · 평가셋 · 알려진 병목
+
+기술 결정 기록(`hyos0415/adr`)의 `jhs-decisions` 스킬이 이 절을 읽고, 이 스택에 영향을 주는 새 릴리스·모델만 골라낸다. 의존성이나 모델을 바꾸면 이 절도 같이 고친다.
+
+표준 라이브러리 우선이다. LLM 호출은 SDK가 아니라 `urllib`로 한다.
+
+### 의존성 → component
+
+| 의존성 (`requirements.txt`) | component |
+|---|---|
+| fastapi · pydantic · jinja2 · uvicorn | web |
+| pdfplumber | ingest |
+| vLLM (docker `vllm/vllm-openai:latest`, `scripts/run_vllm.sh`) | pilot |
+| llama.cpp `llama-server` | analysis |
+| k6 (외부 도구) | tools |
+
+### 외부 모델·서비스
+
+| 모델·서비스 | component |
+|---|---|
+| Anthropic `claude-haiku-4-5-20251001` (조건 추출) | analysis |
+| Anthropic `claude-sonnet-5` · haiku (파일럿) | pilot |
+| `Intel/Qwen3.5-4B-int4-AutoRound` · `kakaocorp/kanana-2-3b-instruct` — vLLM localhost:8000 (파일럿) | pilot |
+| `qwen3.5-4b` — llama-server 127.0.0.1:8081, 로컬 전용 (ADR 0042) — R2 자연어 해석 | analysis |
+| 금융감독원 Finlife API (예금·적금·회사) | ingest |
+| 국가법령정보 DRF open API | ingest |
+
+판정은 `finance_verifier`의 `src/verifier/`를 재사용한다 — verifier 쪽 변화는 거기 절을 본다.
+
+### 평가셋
+
+- gitignore: `data/` 전부 (파일럿·추출 산출물 `data/pilot/`, 원본 `data/raw/`)
+- 추적: `src/analysis/gold_overrides.json` · R2 정답 `src/analysis/r2_sample{,2,3}.py` · `docs/spec/pilot-sample-20260824.md` · `docs/spec/prereg-*.md`
+
+### 알려진 병목
+
+- 판정이 아니라 **추출**이다 (결정 0004). 추출 개선은 멈췄다 — 남은 실패의 71%는 공시 문제, fallback 83.9% 수용 (결정 0013)
+- 설명서 PDF는 읽기가 아니라 **수집**이 병목 — 기관마다 URL이 다르다 (`START-HERE.md`)
