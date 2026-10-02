@@ -57,6 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import ask_budget as AB  # noqa: E402
 import calculate as C  # noqa: E402
+from extract_llm import load_pairs  # noqa: E402  — 카탈로그(무엇이 있나)를 세는 데만 쓴다
 import prefs as P  # noqa: E402
 import r2_parse as R2  # noqa: E402
 import report as R  # noqa: E402
@@ -86,8 +87,10 @@ def load(stamp: str, group: str, term: int) -> tuple[list[dict], dict]:
         except SystemExit as e:          # CLI 는 죽지만 서버는 400 으로 답해야 한다
             raise HTTPException(status_code=400, detail=str(e)) from e
         if not rows:
+            # 어떤 기간이 있는지를 같이 말한다 — 사람 검수: "18개월 적금 아무 은행이나" → "없다" 만 보였다
+            avail = "·".join(str(t) for t in _terms_available())
             raise HTTPException(status_code=400,
-                                detail=f"{term}개월 상품이 없다 (스냅샷 {stamp} · {group})")
+                                detail=f"{term}개월 상품은 공시에 없습니다 — 공시의 가입 기간은 {avail}개월입니다. 가까운 기간을 골라 주세요")
         _CACHE[key] = (rows, by_pair)
     return _CACHE[key]
 
@@ -233,12 +236,54 @@ def start() -> str:
     """폼이다. **자유 입력이 아니다** — 자유 입력(R2)은 `0042` 로 따로 정해 뒀고,
     그때는 로컬 모델이 첫 수신자가 되어야 한다.
     """
-    return RENDER.render_start(snapshots=_snapshot_menu())
+    return RENDER.render_start(snapshots=_snapshot_menu(), catalog=_catalog(), terms=_terms_available())
 
 
 def _snapshot_menu() -> dict[str, list[str]]:
     """권역별로 있는 스냅샷 — 폼이 "비우면 최신" 옆에 무엇이 최신인지 적는 데 쓴다."""
     return {g: AB.snapshots(g) for g in ("bank", "savingsbank")}
+
+
+_CATALOG: dict[str, dict] = {}
+
+
+def _terms_available() -> list[int]:
+    """두 권역에 실제로 있는 가입 기간(개월)의 합집합. 폼 메뉴와 "없다" 안내가 이것을 쓴다. 카탈로그가 비면 공시 단위 기본값."""
+    terms = sorted({t for c in _catalog().values() for t in c.get("기간", [])})
+    return terms or list(RENDER.TERM_MENU)
+
+
+def _catalog() -> dict[str, dict]:
+    """권역별 **무엇이 있나** — 기관 이름(표기)과 예금·적금 상품 수 (F7 · `prereg-35` 사람 검수 · 이슈 #85).
+
+    사람 검수 — *"사용자들이 지금 무슨 은행들이 있는지 모를 거 같다 … 뭔 검색을 해야할 지 모른다"*. 첫 화면이 "어느 은행?" 을 알아야
+    시작할 수 있는 것처럼 보였다. 여기서 센 것을 첫 화면이 그대로 말한다 — "은행 17곳 · 예금 38개 · 적금 59개". 그리고 은행 좁히기는
+    이름을 치는 칸이 아니라 이 목록의 체크박스가 된다. **판정이 아니라 원천의 집계다** — 최신 스냅샷의 전 기간 행에서 (기관코드, 상품코드)를 센다.
+    조건없음 상품도 센다(#87 · 화면과 같은 행). 값은 프로세스가 사는 동안 한 번만 센다.
+    """
+    if _CATALOG:
+        return _CATALOG
+    for g in ("bank", "savingsbank"):
+        try:
+            stamp = AB.latest_snapshot(g)
+            rows, _ = load_pairs(stamp, g, include_no_condition=True)
+        except SystemExit:
+            continue
+        orgs: dict[str, str] = {}                     # 공시 이름 → 표기 이름
+        products: dict[str, set] = {"예금": set(), "적금": set()}
+        terms: set[int] = set()
+        for r in rows:
+            co = r.get("company") or ""
+            if co:
+                orgs[co] = C.org_label(co)
+            products.setdefault(r["kind"], set()).add((r.get("co_no"), r["code"]))
+            terms.add(int(r["term"]))
+        _CATALOG[g] = {"스냅샷": stamp,
+                       "기관": sorted(orgs.items(), key=lambda kv: kv[1]),     # [(공시 이름, 표기 이름)]
+                       "예금": len(products["예금"]), "적금": len(products["적금"]),
+                       # 공시에 실제로 있는 가입 기간(개월) — 사람 검수: "18개월 적금" 이 없다고 나왔다. 공시 단위는 1·3·6·12·24·36 이다
+                       "기간": sorted(terms)}
+    return _CATALOG
 
 
 @app.post("/screen", response_class=HTMLResponse, summary="화면 하나 (HTML)")
@@ -270,10 +315,13 @@ async def screen_html(request: Request) -> str:
     #
     # 에러 계약이 `/api/screen`(JSON)과 `POST /screen`(HTML)에서 다르다 —
     # 같은 함수를 쓰되 **답하는 모양만** 갈라진다.
+    # 은행 좁히기 — 체크박스 목록(company_pick · 공시 이름)을 쉼표 문자열 하나로 (F7). 텍스트 칸(company)이 같이 오면 둘을 합친다
+    f = _with_company_picks(f, multi)
     try:
         return _screen_from_form(f, multi.get("answer_bank", []))
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu()),
+        return HTMLResponse(RENDER.render_start(f, str(e.detail), _snapshot_menu(), catalog=_catalog(),
+                                                terms=_terms_available(), requested_term=f.get("term")),
                             status_code=e.status_code)
 
 
@@ -372,7 +420,10 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
         # 문장은 뷰 모델이 든다 — 한쪽만 쓰는 낱말을 만들지 않는다 (`0039` 반증 조건 1)
         cur = vm["questions"].get("현재") or {}
         notice = cur.get("빈_제출_안내") or "은행을 하나 이상 골라 주세요"
-    return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state))
+    # 멈춤 (F7 · `prereg-35` ④) — "여기서 멈추고 결과 보기". 답은 그대로 실려 있어 "계속 답하기" 로 돌아올 수 있다. 저장은 없다
+    stop = get("stop") == "1"
+    return RENDER.render_screen(vm, form, reports, notice, resume_code(form, state),
+                                stop=stop, survey_url=SURVEY_URL)
 
 
 # ── R2 스코프 미리 채움 (D8 · 이슈 #73 · `0060` D6 · `prereg-29`)
@@ -385,6 +436,8 @@ def _screen_from_form(f: dict[str, str], picked_banks: list[str] | None = None) 
 #           (3) 빈 상자면 모델을 부르지 않는다 · 서빙이 없으면 한 줄 안내와 함께 폼이 그대로 동작한다
 #           (4) 채운 값은 **보이는 칸**에 들어간다 (A19) — hidden 으로 실어 보내지 않는다
 R2_URL = os.environ.get("R2_URL", R2.DEFAULT_URL)
+# 설문 링크 (교육장 파일럿 · `prereg-34` §C) — 외부 익명 폼. 서버는 설문을 받지 않는다(`0040`). 비면 "진행자가 안내"
+SURVEY_URL = os.environ.get("SURVEY_URL", "")
 PREFILL_DEFAULTS = {"group": "bank", "term": "12"}      # select 는 늘 값이 있다 — 기본값 그대로면 "비어 있다" 로 본다
 PREFILL_EMPTY = "문장이 비어 있어 채운 것이 없습니다 — 아래 칸을 직접 골라 주세요"
 PREFILL_UNAVAILABLE = "지금은 문장으로 채울 수 없습니다 (이 컴퓨터의 모델 서버가 꺼져 있습니다) — 아래 칸을 직접 골라 주세요"
@@ -394,7 +447,7 @@ PREFILL_NOTHING = "문장에서 채울 수 있는 칸이 없었습니다 — 아
 
 
 def prefill_fields(f: dict[str, str], text: str,
-                   caller=None) -> tuple[dict[str, str], list[str], str, bool]:
+                   caller=None, terms_available: list[int] | None = None) -> tuple[dict[str, str], list[str], str, bool]:
     """폼 + 문장 → (채워진 폼, 채운 칸 이름, 안내 한 줄, 실패 여부). **문장은 돌려주지 않는다.**
 
     빈 칸만 채운다 — 사용자가 이미 적은 값이 모델 값보다 앞선다 (`prereg-29` §2). select(권역·기간)는 늘 값이
@@ -409,7 +462,14 @@ def prefill_fields(f: dict[str, str], text: str,
     if err:
         busy = "timed out" in err.lower() or "timeout" in err.lower()
         return f, [], (PREFILL_BUSY if busy else PREFILL_UNAVAILABLE), True
-    out, filled = dict(f), []
+    out, filled, extra = dict(f), [], ""
+    # 기간은 **공시에 있는 것만** 채운다 — "18개월" 처럼 없는 기간을 메뉴에 넣어 고르게 하면 다음 화면이 "없다" 로 끝난다(사람 검수 2026-09-10)
+    terms = terms_available or _terms_available()
+    t = values.get("term")
+    if t and t.isdigit() and int(t) not in terms:
+        values = {k: v for k, v in values.items() if k != "term"}
+        extra = f" 문장의 {t}개월은 공시에 없는 기간이라 채우지 않았습니다 — 공시의 가입 기간은 {'·'.join(map(str, terms))}개월입니다."
+        out["_requested_term"] = t               # 템플릿이 가까운 기간 버튼을 그리게 — 화면 값은 아니다(prefill_html 이 뺀다)
     for k in R2.PREFILL_FIELDS:
         v = values.get(k)
         if not v:
@@ -420,10 +480,10 @@ def prefill_fields(f: dict[str, str], text: str,
         out[k] = v
         filled.append(k)
     if not filled:
-        return out, [], PREFILL_NOTHING, False
+        return out, [], PREFILL_NOTHING + extra, False
     labels = {"group": "권역", "company": "은행", "kinds": "예금/적금", "term": "기간"}
     notice = ("문장에서 " + " · ".join(labels[k] for k in filled) + " 을(를) 채웠습니다 — "
-              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 금액은 직접 적어 주세요. 문장은 서버에 남지 않았습니다")
+              "아래 칸을 확인하고 틀린 것은 고친 뒤 \"목록 보기\" 를 눌러 주세요. 금액은 직접 적어 주세요. 문장은 서버에 남지 않았습니다" + extra)
     return out, filled, notice, False
 
 
@@ -431,16 +491,19 @@ def prefill_fields(f: dict[str, str], text: str,
 async def prefill_html(request: Request) -> str:
     """같은 0단계 폼을 **채운 채** 다시 낸다. 계산은 하지 않는다 — `/screen` 이 한다."""
     try:
-        f = _flat(await _form(request))
+        multi = await _form(request)
+        f = _with_company_picks(_flat(multi), multi)
     except HTTPException as e:
-        return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu()), status_code=e.status_code)
+        return HTMLResponse(RENDER.render_start({}, str(e.detail), _snapshot_menu(), catalog=_catalog()), status_code=e.status_code)
     text = f.pop("situation", "")          # 폼 dict 에서 뺀다 — 템플릿에도, 다음 hidden 에도 가지 않는다
     # **스레드풀로 보낸다** (`prereg-34` §A). 모델 호출은 동기 urllib 로 3~30초를 기다리는데, async 핸들러 안에서 그대로 부르면
     # 이벤트 루프가 서서 **다른 사람의 "목록 보기" 까지 멈춘다** — 부하 시험 ① 에서 /screen p95 가 13 ms → 40 초였다
     form, filled, notice, failed = await run_in_threadpool(prefill_fields, f, text)
     del text
+    requested = form.pop("_requested_term", None)     # 공시에 없는 기간을 문장이 말했으면 가까운 기간 버튼을 준다
     return RENDER.render_start(form, None, _snapshot_menu(), prefilled=filled,
-                               prefill_notice=notice, prefill_failed=failed)
+                               prefill_notice=notice, prefill_failed=failed, catalog=_catalog(),
+                               terms=_terms_available(), requested_term=requested)
 
 
 # 이어하기 코드에 들어가는 것 — 이 화면을 다시 만들 때 필요한 전부다. `state` 는 답이다
@@ -471,6 +534,15 @@ async def _form(request: Request) -> dict[str, list[str]]:
                             detail=f"폼이 아니다 (content-type={ctype!r})")
     raw = (await request.body()).decode("utf-8")
     return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
+
+def _with_company_picks(f: dict[str, str], multi: dict[str, list[str]]) -> dict[str, str]:
+    """체크박스 `company_pick`(공시 이름 · 여럿)을 `company` 쉼표 문자열로 합친다 — 서버 안쪽은 지금까지처럼 문자열 하나만 본다."""
+    picks = [p for p in multi.get("company_pick", []) if p.strip()]
+    if not picks:
+        return f
+    typed = [w.strip() for w in (f.get("company") or "").split(",") if w.strip()]
+    return {**f, "company": ",".join(dict.fromkeys(typed + picks))}
 
 
 def _flat(multi: dict[str, list[str]]) -> dict[str, str]:

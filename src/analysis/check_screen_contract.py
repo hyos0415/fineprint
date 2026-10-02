@@ -53,6 +53,9 @@
         상자가 비었으면 모델 호출이 0 이어야 하고, 금액 두 칸은 채우지 않아야 하며, 적힌 금액 옆에는 한글 읽기가
         있어야 한다** (R2 · `0060` D6 · 반증 조건 4 · `prereg-29`) — 사용자가 못 보는 값도, 읽을 수 없는 값도 확인이
         아니다. 검사는 모델 대신 가짜 호출을 꽂아 본다 (서빙 없이 돈다)
+    A20 **접되, 계약은 접지 않는다** (F7 · `prereg-35`) — 성과 줄 범위 · 세후 라벨 · 고지 · 진행 카운터 · 사유 문장 · 스코프 밖 %
+        는 닫힌 `<details>` 안에 있으면 안 된다. 문장이 HTML 에 있어도 접혀 있으면 사용자는 못 본다. 채운 칸이 든 접기는
+        펼쳐져 있어야 하고, 멈춤 화면(stop)에도 세후·고지·성과 줄이 있어야 한다. 스크립트는 시작 화면의 하나(`0061`)뿐이다
 
     **비교 리포트도 같은 계약을 진다** (이슈 #33). 목록 화면과 리포트는 렌더가
     다르므로 계약을 두 번 검사한다 — 리포트 쪽 위반은 `detail` 에 `[리포트]` 가
@@ -283,8 +286,9 @@ def check_prefill(tag: str) -> list[dict]:
 
     bad: list[dict] = []
     marker = "A19검사용원문표지문장"
-    fake = {"group": "savingsbank", "company": "웰컴저축은행,페퍼저축은행", "kinds": "적금", "term": "18",
+    fake = {"group": "savingsbank", "company": "웰컴저축은행,페퍼저축은행", "kinds": "적금", "term": "24",
             "amount_deposit": "30000000", "amount_monthly": "300000"}
+    TERMS = [1, 3, 6, 12, 24, 36]          # 공시의 가입 기간 단위 — 서버는 카탈로그에서 센다. 검사는 고정값으로 본다
     calls: list[str] = []
 
     def caller(t):
@@ -297,7 +301,11 @@ def check_prefill(tag: str) -> list[dict]:
         bad.append(hit(f"빈 상자인데 호출 {len(calls)} · 채운 칸 {filled} · 폼 변경 {out != f0}"))
     # (가)(나)(라) 채움 — 사용자가 적은 은행 칸은 그대로, 나머지는 보이는 칸에
     f1 = {"group": "bank", "term": "12", "company": "우리", "kinds": "", "amount_deposit": "", "amount_monthly": ""}
-    out, filled, notice, failed = APP.prefill_fields(dict(f1), marker, caller)
+    out, filled, notice, failed = APP.prefill_fields(dict(f1), marker, caller, terms_available=TERMS)
+    # 공시에 없는 기간(18)은 채우지 않고 안내한다 — 있는 것처럼 메뉴에 넣어 "없다" 로 끝나게 하지 않는다
+    out18, filled18, notice18, _ = APP.prefill_fields(dict(f1), marker, lambda t: ({**fake, "term": "18"}, 0.0, None), terms_available=TERMS)
+    if "term" in filled18 or out18.get("term") != "12" or "18개월" not in (notice18 or ""):
+        bad.append(hit(f"공시에 없는 18개월을 채웠거나 안내가 없다: {filled18} · {out18.get('term')}"))
     if len(calls) != 1:
         bad.append(hit(f"문장 하나에 호출 {len(calls)}"))
     if out.get("company") != "우리" or "company" in filled:
@@ -312,6 +320,10 @@ def check_prefill(tag: str) -> list[dict]:
     html = RENDER.render_start(out, None, {}, prefilled=filled, prefill_notice=notice, prefill_failed=failed)
     if marker in html:
         bad.append(hit("문장(원문)이 응답 HTML 에 남았다"))
+    # 채운 칸은 **펼쳐진 자리**에 있어야 한다 (F7 · 접기가 A19 를 깨면 안 된다) — 닫힌 details 를 지운 뒤에도 값이 보여야 한다
+    for k, v in expect.items():
+        if not re.search(rf'name="{k}"[^>]*value="{re.escape(v)}"|<select[^>]*name="{k}".*?<option value="{re.escape(v)}"[^>]*selected', unfolded(html), re.S):
+            bad.append(hit(f"{k}={v} 가 닫힌 접기 안에 있다"))
     for k, v in expect.items():
         vis = (re.search(rf'<input[^>]*name="{k}"[^>]*value="{re.escape(v)}"', html)
                or re.search(rf'<select[^>]*name="{k}".*?<option value="{re.escape(v)}"[^>]*selected', html, re.S))
@@ -334,6 +346,67 @@ def check_prefill(tag: str) -> list[dict]:
     html2 = RENDER.render_start(out2, None, {}, prefilled=filled2, prefill_notice=notice2, prefill_failed=failed2)
     if marker in html2 or 'action="/screen"' not in html2:
         bad.append(hit("실패 화면에 원문이 남거나 목록 보기 폼이 없다"))
+    return bad
+
+
+DETAILS_TAG = re.compile(r"<details\b([^>]*)>|</details\s*>", re.I)
+
+
+def unfolded(html: str) -> str:
+    """닫힌 `<details>` 안의 내용을 지운 HTML — **처음 열었을 때 사용자가 보는 것**이다 (A20 · `prereg-35`).
+
+    **중첩을 스택으로 센다.** 비탐욕 정규식(`<details …>.*?</details>`)은 바깥 닫힌 접기 안에 접기가 하나 더 있으면 안쪽 `</details>` 에서 멈춰
+    바깥 나머지가 "보이는 글자" 로 샜다 — A20 이 느슨해지는 방향이라 고쳤다(2026-09-10 · 시작 화면의 은행 목록 접기에서 드러났다).
+    열린 접기(`open`) 안은 보인다. 닫힌 접기 안은 그 안의 열린 접기까지 전부 안 보인다. 닫힌 접기의 `<summary>` 는 보이지만 여기서는
+    보수적으로 안 보이는 쪽으로 센다 — 계약 문장이 summary 에만 있으면 그것도 위반이다.
+    """
+    out, stack, pos, hidden_depth = [], [], 0, 0
+    for m in DETAILS_TAG.finditer(html):
+        if hidden_depth == 0:
+            out.append(html[pos:m.start()])
+        pos = m.end()
+        if m.group(0).lower().startswith("</"):
+            if stack and stack.pop():
+                hidden_depth -= 1
+        else:
+            is_closed = not re.search(r"\bopen\b", m.group(1) or "", re.I)
+            stack.append(is_closed)
+            if is_closed:
+                hidden_depth += 1
+    if hidden_depth == 0:
+        out.append(html[pos:])
+    return " ".join(out)
+
+
+def check_folding(vm: dict, html: str, tag: str, stop_html: str | None = None) -> list[dict]:
+    """A20 — 계약 문장이 닫힌 접기 안에 있지 않다. `html` 은 render_screen 결과다."""
+    def hit(detail: str) -> dict:
+        return {"assert": "A20", "product": "-", "session": tag, "step": -1, "detail": f"[웹] {detail}"}
+    bad = []
+    shown = unfolded(html)
+    seen = visible(shown)
+    need = [("세후 라벨", vm["meta"]["세후_라벨"]), ("고지", L.NOTICE), ("진행 카운터", f"답한 질문 {vm['questions']['답한']}/")]
+    if vm["headline"]["상품"]:
+        need.append(("성과 줄 범위", V.display(vm["products"][0])["범위"]))
+        need.append(("성과 줄 라벨", vm["headline"]["라벨"]))
+    for r in vm["notices"]["사유"]:
+        need.append((f"사유 {r['코드']}", r["문장"]))
+    if vm["notices"]["스코프밖"]:
+        need.append(("스코프 밖", f"{vm['notices']['스코프밖']['net_hi']:.2f}%"))
+    for name, text in need:
+        if text not in html:
+            continue                                   # 있어야 하는지는 다른 계약(A3·A7·A8·A12·A13)이 본다 — 여기는 "접혔나" 만
+        if text not in seen:
+            bad.append(hit(f"{name} 가 닫힌 접기 안에 있다 — 사용자가 처음 열면 안 보인다"))
+    if "<script" in html.lower():
+        bad.append(hit("질문 화면에 스크립트가 있다 — 스크립트는 시작 화면의 하나뿐이다 (`0061`)"))
+    if stop_html is not None:
+        s_seen = visible(unfolded(stop_html))
+        for name, text in need[:2] + ([need[3]] if vm["headline"]["상품"] else []):
+            if text not in s_seen:
+                bad.append(hit(f"멈춤 화면에 {name} 가 보이는 자리에 없다"))
+        if "설문" not in s_seen:
+            bad.append(hit("멈춤 화면에 설문 안내가 없다"))
     return bad
 
 
@@ -374,8 +447,13 @@ def check_web(scored: list[dict], plan: dict, state: dict, total: int,
                      "0단계 폼(오류)")):
         for v in check_words(visible(화면), 이름):
             bad += hit("A14", v["product"], v["detail"])
+        if 화면.lower().count("<script") != 1:
+            bad += hit("A20", "-", f"{이름}의 스크립트가 {화면.lower().count('<script')}개 — 표시용 하나여야 한다 (`0061`)")
     # A19 — 문장으로 미리 채운 폼 (R2). 모델 없이 가짜 호출로 본다
     bad += check_prefill(tag)
+    # A20 — 접되, 계약은 접지 않는다 (F7). 멈춤 화면도 같이 본다
+    stop_html = RENDER.render_screen(vm, form, reports, stop=True)
+    bad += check_folding(vm, html, tag, stop_html)
     # A12·A13 — 세후 라벨과 고지. 문구는 상수에서 온다(사본을 만들지 않는다)
     if "%" in html and "세후" not in html:
         bad += hit("A12", "-", "금리가 있는 화면에 `세후` 라벨이 없다")
@@ -791,7 +869,8 @@ def run(stamp: str, group: str, term: int, seeds: int,
                        ("A16", "같은 상품은 한 줄 · 다른 행의 숫자는 남는다"),
                        ("A17", "기관 링크·전화가 있고 URL 은 API 값 그대로다"),
                        ("A18", "예상 이자(원)에는 세전·세후 라벨과 가정이 붙는다"),
-                       ("A19", "문장으로 채운 값은 보이는 칸에 · 원문은 남지 않는다")):
+                       ("A19", "문장으로 채운 값은 보이는 칸에 · 원문은 남지 않는다"),
+                       ("A20", "접되, 계약은 접지 않는다 · 스크립트는 하나")):
         if name in ("A10", "A11") and not prefs:
             print(f"  {name} {text:<35}검사 안 함 (--prefs 없음)")
             continue

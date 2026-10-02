@@ -49,13 +49,15 @@ _env = Environment(
 )
 
 
-TERM_MENU = (6, 12, 24, 36)
+TERM_MENU = (1, 3, 6, 12, 24, 36)     # 공시의 가입 기간 단위 — 서버가 카탈로그에서 실측한 값을 넘기면 그것을 쓴다
 
 
 def render_start(form: dict | None = None, error: str | None = None,
                  snapshots: dict[str, list[str]] | None = None,
                  prefilled: tuple[str, ...] | list[str] | set[str] = (),
-                 prefill_notice: str | None = None, prefill_failed: bool = False) -> str:
+                 prefill_notice: str | None = None, prefill_failed: bool = False,
+                 catalog: dict | None = None, terms: list[int] | None = None,
+                 requested_term: int | str | None = None) -> str:
     """0단계 폼. 상품 목록을 만드는 **검색 축**을 받는다 (`0028`).
 
     조건 답은 여기서 받지 않는다 — 그건 질문 루프의 일이고, 사용자가 예/아니오/모름으로
@@ -66,14 +68,20 @@ def render_start(form: dict | None = None, error: str | None = None,
     `prefill_notice` 는 채우기 뒤에 한 줄 (성공·실패·빈 상자). 문장 자체는 여기 오지 않는다.
     """
     form = form or {}
-    # 기간 메뉴 — 모델이 낸 기간이 메뉴 밖(예: 18)이면 그 값을 더해 **보이게** 한다. 조용히 12 로 바꾸지 않는다
-    terms = list(TERM_MENU)
+    # 기간 메뉴 — **공시에 있는 기간만**. 전에는 모델이 낸 18개월을 메뉴에 더해 고르게 했는데 다음 화면이 "없다" 로 끝났다(사람 검수 2026-09-10).
+    # 없는 기간은 prefill 이 채우지 않고 안내로 말한다. 폼 값이 메뉴 밖이면 12 로 보이되 그 사실은 안내가 말한다
+    terms = list(terms or TERM_MENU)
+    # 요청한 기간이 공시에 없으면 **가까운 기간을 고르게 한다** — 대신 골라 주지 않는다(사람 결정 2026-09-10 · "가까운 상품을 보여주는 게 맞을 것 같다").
+    # 아래로 가장 가까운 것과 위로 가장 가까운 것 둘(18 → 12·24 · 9 → 6·12 · 48 → 36). 버튼은 폼 안에서 term 값을 실어 보낸다 — 선택은 사용자가 한다
+    nearby: list[int] = []
     try:
-        t = int(str(form.get("term", "")).strip() or 0)
+        rt = int(str(requested_term).strip()) if requested_term not in (None, "") else None
     except ValueError:
-        t = 0
-    if t and t not in terms:
-        terms = sorted(terms + [t])
+        rt = None
+    if rt is not None and rt not in terms:
+        lower = [t for t in terms if t < rt]
+        upper = [t for t in terms if t > rt]
+        nearby = ([max(lower)] if lower else []) + ([min(upper)] if upper else [])
     # 금액 읽기 — 칸에 값이 있으면 옆에 한글로 (`오백만 원`). 사람 세션에서 `5000000` 을 읽지 못했다(`prereg-29` §7).
     # 판정이 아니라 같은 값을 다른 표기로 한 번 더 보이는 것이다. 못 읽는 값은 그냥 둔다 — 제출 때 서버가 오류로 답한다
     readings: dict[str, str] = {}
@@ -85,8 +93,22 @@ def render_start(form: dict | None = None, error: str | None = None,
             readings[k] = C.amount_words(C.parse_amount(raw))
         except SystemExit:
             pass
+    # "더 정하기" 를 펼칠 것인가 (F7 · `prereg-35` ①) — 접힌 칸에 값이 있으면 펼친다. 사용자가 적었든 문장에서 채웠든
+    # **값이 있는 칸은 보여야 한다**(A19). 기본값(정렬 hi · 빈 스냅샷)은 값으로 치지 않는다. 판정은 여기(렌더러 코드)서 하고 템플릿은 플래그만 쓴다
+    folded = ["company", "amount_deposit", "amount_monthly", "snapshot", "resume_code",
+              f"pref_{P.LIST_AXIS}"] + [f"pref_{k}" for k in P.AXES]
+    unfold = any(str(form.get(k) or "").strip() for k in folded) or (form.get("order") or "hi") != "hi"         or any(k in set(prefilled) for k in folded)
+    # 은행 좁히기 체크박스 — 고른(또는 문장에서 채운) 공시 이름. 그 이름이 든 권역 목록은 펼쳐서 낸다(값이 있는 칸은 보여야 한다 · A19)
+    picked = {w.strip() for w in str(form.get("company") or "").split(",") if w.strip()}
+    catalog = catalog or {}
+    open_groups = {g for g, c in catalog.items() if any(co in picked for co, _ in c.get("기관", []))}
     return _env.get_template("start.html").render(
         form=form,
+        카탈로그=catalog,
+        없는_기간=rt if nearby else None,
+        가까운_기간=nearby,
+        고른_은행=picked,
+        펼칠_권역=open_groups,
         축=P.AXES,                      # 선호 5문항 — 고정 표에서 온다 (`0030`)
         목록축=P.LIST_AXIS,
         스냅샷=snapshots or {},          # 권역별로 있는 날짜 — 비우면 최신 (이슈 #52)
@@ -94,13 +116,15 @@ def render_start(form: dict | None = None, error: str | None = None,
         기간들=terms,
         채운칸=set(prefilled),
         금액읽기=readings,
+        더_펼침=unfold,
         prefill_notice=prefill_notice,
         prefill_failed=prefill_failed,
     )
 
 
 def render_screen(vm: dict, form: dict, reports: list[dict],
-                  notice: str | None = None, resume_code: str = "") -> str:
+                  notice: str | None = None, resume_code: str = "",
+                  stop: bool = False, survey_url: str = "") -> str:
     """**검사가 부르는 함수.** 뷰 모델 하나가 화면 하나가 된다.
 
     `form` 은 다음 요청에 그대로 실어 보낼 것들이다 — 스냅샷·권역·기간·스코프·선호와
@@ -117,4 +141,8 @@ def render_screen(vm: dict, form: dict, reports: list[dict],
         notice=notice,
         # 이어하기 코드 (D9) — 서버가 만든 문자열. 비면 상자를 안 그린다(검사가 부를 때)
         resume_code=resume_code,
+        # 멈춤 화면 (F7 · `prereg-35` ④) — 질문 카드 대신 요약 카드. 요약 문장은 뷰 모델에 이미 있는 문자열의 배치다.
+        # 설문 링크는 환경변수 — 서버는 설문을 받지 않는다(`0040`). 없으면 템플릿이 "진행자가 안내" 한 줄을 낸다
+        stop=stop,
+        survey_url=survey_url,
     )
