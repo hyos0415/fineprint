@@ -155,7 +155,7 @@ Windows 11 + RTX 4070 Laptop 8GB → WSL2 → Docker Desktop → vLLM(공식 이
 |---|---|
 | fastapi · pydantic · jinja2 · uvicorn | web |
 | pdfplumber | ingest |
-| vLLM (docker `vllm/vllm-openai:latest`, `scripts/run_vllm.sh`) | pilot |
+| vLLM 0.27.1 (docker `vllm/vllm-openai@sha256:0a51ea5b…` digest 고정 — ADR 0012, `scripts/run_vllm.sh`) | pilot |
 | llama.cpp `llama-server` | analysis |
 | k6 (외부 도구) | tools |
 

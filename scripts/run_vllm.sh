@@ -15,7 +15,7 @@
 # 모델 사전 다운로드:
 #   MSYS_NO_PATHCONV=1 docker run --rm \
 #     -v "C:\Users\user\.cache\huggingface:/root/.cache/huggingface" \
-#     --entrypoint hf vllm/vllm-openai:latest download <model>
+#     --entrypoint hf vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967 download <model>
 set -euo pipefail
 
 MODEL="${1:?usage: run_vllm.sh <model_name> [extra vllm args...]}"
@@ -24,6 +24,9 @@ shift || true
 CONTAINER_NAME="vllm-server"
 HF_CACHE_WIN_PATH='C:\Users\user\.cache\huggingface'
 VLLM_CACHE_WIN_PATH='C:\Users\user\.cache\vllm'
+# 이미지는 finance_verifier 측정 때 쓴 v0.27.1 digest로 고정한다 (hyos0415/adr ADR 0012).
+# :latest면 다음 pull에서 vLLM이 몇 단계를 건너뛰어 같은 조건으로 재현할 수 없다. 올리려면 새 ADR로.
+VLLM_IMAGE='vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967'
 
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
@@ -33,7 +36,7 @@ MSYS_NO_PATHCONV=1 docker run -d --name "$CONTAINER_NAME" --gpus all \
   -v "${VLLM_CACHE_WIN_PATH}:/root/.cache/vllm" \
   -p 8000:8000 \
   --ipc=host \
-  vllm/vllm-openai:latest \
+  "$VLLM_IMAGE" \
   --model "$MODEL" \
   --gpu-memory-utilization 0.85 \
   --max-model-len 6144 \
